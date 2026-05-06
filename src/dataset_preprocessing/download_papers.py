@@ -2,7 +2,7 @@
 # 
 # date: May 5th 2026
 #
-# fetches and downloads the first n papers in the most recent biorxiv s3 dump
+# fetches and downloads the latest n papers in from biorxiv s3 bucket
 
 import io
 import boto3
