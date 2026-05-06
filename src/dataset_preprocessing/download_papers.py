@@ -1,4 +1,4 @@
-# download_pdfs.py
+# download_papers.py
 # 
 # date: May 5th 2026
 #
@@ -45,9 +45,10 @@ def get_latest_folder() -> str:
     return max(folders, key=parse_folder_date)
 
 
-def list_n_keys(n: int, prefix: str) -> list[str]:
+def list_keys(n: int, prefix: str, max_mb: int = 15) -> list[str]:
     '''
     lists the first n keys (lexicographical order) in the specified folder
+    skips .meca files that are over 15mb (overly large compared to median)
     '''
 
     paginator = s3_client.get_paginator('list_objects_v2')
@@ -56,45 +57,49 @@ def list_n_keys(n: int, prefix: str) -> list[str]:
     for page in page_iterator:
         for obj in page.get("Contents", []):
             if obj["Key"].endswith(".meca"):
-                keys.append(obj["Key"])
+                size_mb = obj["Size"] / 1e6
+                if size_mb <= max_mb:
+                    keys.append(obj["Key"])
                 if len(keys) >= n:
                     return keys
+                
     return keys
 
 
-def download_single_pdf(key: str, output_dir: Path) -> None:
+def download_single(key: str, output_dir: Path) -> None:
     '''
-    downloads the pdf associated with the given key
+    downloads the content folder associated with the given key
     '''
-
-    output_path = output_dir / (Path(key).stem + ".pdf")
-    if output_path.exists():
-        logger.warning(f"Already downloaded PDF for {key}")
+    key_dir = output_dir / (Path(key).stem)
+    if key_dir.exists():
+        logger.warning(f"Already downloaded content for {key}")
         return
+    else:
+        key_dir.mkdir()
     
     obj = s3_client.get_object(Bucket=BUCKET, Key=key, RequestPayer="requester")
     data = obj["Body"].read()
     with zipfile.ZipFile(io.BytesIO(data)) as z:
-        pdfs = [f for f in z.namelist() if f.startswith("content/") and f.endswith(".pdf")]
-        if not pdfs:
-            logger.warning(f"No PDF found in {key}")
-            return
-        
-        pdf_path = pdfs[0] # there should just be one
-        with z.open(pdf_path) as pdf:
-            output_path.write_bytes(pdf.read())
-        
-def download_n_pdfs(n: int, output_dir: str, max_workers: int = 10) -> list[str]:
+        content_files = [f for f in z.namelist() if f.startswith("content/")]
+
+        for file_path in content_files:
+            filename = Path(file_path).name
+            output_path = key_dir / filename
+            with z.open(file_path) as f:
+                output_path.write_bytes(f.read())
+
+
+def download_papers(n: int, output_dir: str, max_workers: int = 10) -> list[str]:
     '''
     downloads the first n papers (as pdfs) from the latest biorxiv s3 dump.
     returns the papers where download failed
     '''
-    keys = list_n_keys(n=n, prefix=get_latest_folder())
-
+    keys = list_keys(n=n, prefix=get_latest_folder())
+    
     completed = 0
     failed = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future2key = {executor.submit(download_single_pdf, k, output_dir): k for k in keys}
+        future2key = {executor.submit(download_single, k, output_dir): k for k in keys}
         for future in tqdm(as_completed(future2key), total=len(future2key), desc="Downloading"):
             key = future2key[future]
             try:
@@ -110,13 +115,15 @@ def download_n_pdfs(n: int, output_dir: str, max_workers: int = 10) -> list[str]
 # ------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Download preprint PDFs from bioRxiv S3 bucket")
-    parser.add_argument("--n-files", type=int, default=100, help="Number of PDFs to download")
-    parser.add_argument("--output-dir", type=Path, default=(DATASET_DIR / "PDFs"), help="Output directory")
+    parser = argparse.ArgumentParser(description="Download preprints from bioRxiv S3 bucket")
+    parser.add_argument("--n-files", type=int, default=10, help="Number of preprints to download")
+    parser.add_argument("--output-dir", type=Path, default=(DATASET_DIR / "papers"), help="Output directory")
     parser.add_argument("--max-workers", type=int, default=10, help="Number of parallel downloads")
     args = parser.parse_args()
 
-    failed = download_n_pdfs(n=args.n_files, output_dir=args.output_dir, max_workers=args.max_workers)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    failed = download_papers(n=args.n_files, output_dir=args.output_dir, max_workers=args.max_workers)
     if failed:
         print("Failed files:")
         for f in failed:

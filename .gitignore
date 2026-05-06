@@ -13,3 +13,5 @@ wheels/
 secrets.env
 
 dataset/
+
+.DS_Store
