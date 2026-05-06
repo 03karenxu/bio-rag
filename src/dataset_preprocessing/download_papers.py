@@ -45,14 +45,40 @@ def get_latest_folder() -> str:
     return max(folders, key=parse_folder_date)
 
 
-def list_keys(n: int, prefix: str, max_mb: int = 15) -> list[str]:
+def list_recent_keys(n: int, folder: str = None) -> list[str]:
+    '''
+    gets the top n most recent keys in either the specified folder, or the
+    most recent one if not given
+    '''
+    folder = folder or get_latest_folder()
+    logger.info(f"Fetching from folder: {folder}")
+    
+    paginator = s3_client.get_paginator('list_objects_v2')
+    page_iterator = paginator.paginate(
+        Bucket=BUCKET,
+        Prefix=folder,
+        RequestPayer="requester"
+    )
+    
+    all_keys = []
+    for page in page_iterator:
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".meca"):
+                all_keys.append((obj["LastModified"], obj["Key"]))
+    
+    all_keys.sort(key=lambda x: x[0], reverse=True)
+    
+    return [key for _, key in all_keys[:n]]
+
+
+def list_keys(n: int, folder: str, max_mb: int = 15) -> list[str]:
     '''
     lists the first n keys (lexicographical order) in the specified folder
     skips .meca files that are over 15mb (overly large compared to median)
     '''
 
     paginator = s3_client.get_paginator('list_objects_v2')
-    page_iterator = paginator.paginate(Bucket=BUCKET, Prefix=prefix, RequestPayer="requester")
+    page_iterator = paginator.paginate(Bucket=BUCKET, Prefix=folder, RequestPayer="requester")
     keys = []
     for page in page_iterator:
         for obj in page.get("Contents", []):
@@ -94,7 +120,7 @@ def download_papers(n: int, output_dir: str, max_workers: int = 10) -> list[str]
     downloads the first n papers (as pdfs) from the latest biorxiv s3 dump.
     returns the papers where download failed
     '''
-    keys = list_keys(n=n, prefix=get_latest_folder())
+    keys = list_recent_keys(n=n, folder=get_latest_folder())
     
     completed = 0
     failed = []
@@ -117,13 +143,14 @@ def download_papers(n: int, output_dir: str, max_workers: int = 10) -> list[str]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download preprints from bioRxiv S3 bucket")
     parser.add_argument("--n-files", type=int, default=10, help="Number of preprints to download")
-    parser.add_argument("--output-dir", type=Path, default=(DATASET_DIR / "papers"), help="Output directory")
+    parser.add_argument("--output-dir", type=Path, default="papers", help="Output directory (within dataset dir)")
     parser.add_argument("--max-workers", type=int, default=10, help="Number of parallel downloads")
     args = parser.parse_args()
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = DATASET_DIR / args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    failed = download_papers(n=args.n_files, output_dir=args.output_dir, max_workers=args.max_workers)
+    failed = download_papers(n=args.n_files, output_dir=output_dir, max_workers=args.max_workers)
     if failed:
         print("Failed files:")
         for f in failed:
