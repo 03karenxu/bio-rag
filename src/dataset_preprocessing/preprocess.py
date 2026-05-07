@@ -2,7 +2,7 @@
 #
 # May 6th, 2026
 #
-# processes the evaluation dataset into metadata + chunks
+# processes the evaluation dataset into metadata + chunks + embeddings
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ TT = tiktoken.get_encoding("cl100k_base")
 class Paper(BaseModel):
     title: str
     doi: str
-    abstract: str
+    abstract: list[Chunk] # will only have more than 1 element if abstract has more than max tokens
     keywords: list[str]
     authors: list[str]
     date: str
@@ -54,13 +54,12 @@ def _get_all_text(element, path: str) -> str:
     return "".join(e.itertext()).strip()
 
 
-def _get_chunks(root: ET.element) -> list[Chunk]:
-    '''
-    breaks the body of a paper into chunks. each paragraph/figure becomes a
-    chunk. if the chunk size is greater than MAX_CHUNK_SIZE, it is split.
-    '''
-
-    def make_chunk(text: str, section: str, img_path: str | None = None) -> list[Chunk]:
+def _make_chunk(text: str, section: str, img_path: str | None = None) -> list[Chunk]:
+        '''
+        creates a Chunk from a paragraph. if the number of tokens in the paragraph is larger than
+        MAX_CHUNK_SIZE, it gets split in half. assumes that paragraphs will not
+        be more than double MAX_CHUNK_SIZE.
+        '''
         n_tokens = len(TT.encode(text))
         if n_tokens > MAX_CHUNK_SIZE:
             # split in half semantically (at sentence boundaries)
@@ -73,8 +72,16 @@ def _get_chunks(root: ET.element) -> list[Chunk]:
             ]
         return [Chunk(n_tokens=n_tokens, section=section, text=text, img_path=img_path)]
 
+
+def _process_body(root: ET.element) -> list[Chunk]:
+    '''
+    breaks the body of a paper into chunks. each paragraph/figure becomes a
+    chunk. if the chunk size is greater than MAX_CHUNK_SIZE, it is split.
+    '''
+
     def process_element(child, section: str) -> None:
         if child.tag == "fig":
+            # figure
             label = "".join(child.find("label").itertext()).strip() if child.find("label") is not None else ""
             caption_el = child.find(".//caption")
             caption = "".join(caption_el.itertext()).strip() if caption_el is not None else ""
@@ -82,11 +89,12 @@ def _get_chunks(root: ET.element) -> list[Chunk]:
             img_path = graphic.get("{http://www.w3.org/1999/xlink}href") if graphic is not None else None
             text = f"{label} {caption}".strip()
             if text:
-                chunks.extend(make_chunk(text, section, img_path=img_path))
+                chunks.extend(_make_chunk(text, section, img_path=img_path))
         else:
+            # regular paragraph
             text = "".join(child.itertext()).strip()
             if text and len(TT.encode(text)) > MIN_CHUNK_SIZE:
-                chunks.extend(make_chunk(text, section))
+                chunks.extend(_make_chunk(text, section))
 
     def process_section(sec, parent_title: str | None = None) -> None:
         title = "".join(sec.find("title").itertext()).strip() if sec.find("title") is not None else "Unknown"
@@ -94,6 +102,7 @@ def _get_chunks(root: ET.element) -> list[Chunk]:
 
         for child in sec:
             if child.tag == "sec":
+                # subsections
                 process_section(child, parent_title=section_label)
             elif child.tag != "title":
                 process_element(child, section_label)
@@ -122,15 +131,16 @@ def parse_paper(xml_path: Path) -> Paper:
         day = date.findtext("day", default="").zfill(2)
         return f"{year}-{month}-{day}"
 
-    def get_abstract() -> str:
+    def get_abstract() -> list[Chunk]:
         abstract = root.find(".//abstract")
         if abstract is None:
             return ""
-        parts = []
+        texts = []
         for child in abstract:
             if child.tag != "title":
-                parts.extend(child.itertext())
-        return "".join(parts).strip()
+                texts.extend(child.itertext())
+        full_text = "".join(texts).strip()
+        return _make_chunk(text=full_text, section="Abstract")
 
     return Paper(
         title=_get_all_text(root, ".//article-title"),
@@ -143,7 +153,7 @@ def parse_paper(xml_path: Path) -> Paper:
         ],
         date=get_date("accepted") or get_date("received"),
         categories=[s.text for s in root.findall(".//subj-group/subject") if s.text],
-        body=_get_chunks(root)
+        body=_process_body(root)
     )
 
 
@@ -152,7 +162,7 @@ async def _embed_paper(paper: Paper) -> Paper:
     def make_batches(max_tokens: int = 7000) -> list[list[Chunk]]:
         batches, current, current_tokens = [], [], 0
         
-        for chunk in paper.body:
+        for chunk in (paper.abstract + paper.body):
             if current_tokens + chunk.n_tokens > max_tokens:
                 if current:
                     batches.append(current)
