@@ -1,4 +1,4 @@
-# download_papers.py
+# download.py
 # 
 # date: May 5th 2026
 #
@@ -13,7 +13,7 @@ from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from paths import DATASET_DIR
+from config import DATASET_DIR
 
 s3_client = boto3.client("s3", region_name="us-east-1")
 logger = logging.getLogger(__name__)
