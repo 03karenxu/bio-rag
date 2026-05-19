@@ -14,7 +14,10 @@ from pathlib import Path
 from datetime import datetime
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import DATASET_DIR
+
+from utils import init_logging
+from config import DATASET_DIR, COHERE_COMPATIBLE_FORMATS, LOG_DIR
+from utils.image_handling import save_as_png, resize_and_save
 
 s3_client = boto3.client("s3", region_name="us-east-1")
 logger = logging.getLogger(__name__)
@@ -89,24 +92,7 @@ def fetch_paper(key: str) -> tuple[str, dict[str, bytes]]:
     return key, files
 
 
-def fetch_papers(n: int, max_workers: int = 10, folder: str = None) -> Iterator[tuple[str, dict[str, bytes]]]:
-    '''
-    streams the latest n papers from the specified (or most recent if unspecified)
-    biorxiv s3 dump. yields (key, files) tuples where files is a dict of {filename: bytes}.
-    '''
-    keys = list_recent_keys(n=n, folder=folder or get_latest_folder())
- 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future2key = {executor.submit(fetch_paper, k): k for k in keys}
-        for future in as_completed(future2key):
-            key = future2key[future]
-            try:
-                yield future.result()
-            except Exception as e:
-                logger.error(f"Fetch failed for {key}: {e}")
-
-
-def save_paper(key: str, files: dict[str, bytes], output_dir: Path) -> None:
+def download_paper(key: str, files: dict[str, bytes], output_dir: Path) -> None:
     '''
     saves a paper's content files to disk under output_dir/<stem>/.
     '''
@@ -116,29 +102,61 @@ def save_paper(key: str, files: dict[str, bytes], output_dir: Path) -> None:
         return
     key_dir.mkdir(parents=True)
     for filename, content in files.items():
-        (key_dir / filename).write_bytes(content)
+        outpath = key_dir / filename
+        if Path(filename).stem.isdigit():
+            outpath.write_bytes(content)
+        elif Path(filename).suffix.lower() in COHERE_COMPATIBLE_FORMATS:
+            # if main file or is already compatible, save as-is
+            resize_and_save(outpath, content)
+        elif Path(filename).suffix:
+            try:
+                save_as_png(filename, content, key_dir)
+            except Exception as e:
+                logger.warning(f"Could not convert {filename} to .png, saving as-is: {e}")
+                outpath.write_bytes(content)
+        
+
+def download_papers(n: int, output_dir: Path, max_workers: int = 10, folder: str = None) -> list[str]:
+    '''
+    downloads the latest n papers from the specified (or most recent if unspecified)
+    biorxiv s3 dump. returns a list of failed keys
+    '''
+    logger.info(f"Downloading {n} papers...")
+    keys = list_recent_keys(n=n, folder=folder or get_latest_folder())
+
+    def process_paper(key, output_dir):
+        key, files = fetch_paper(key)
+        download_paper(key, files, output_dir)
+
+    failed = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future2key = {executor.submit(process_paper, k, output_dir): k for k in keys}
+        for future in tqdm(as_completed(future2key), total=len(future2key)):
+            key = future2key[future]
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"Download failed for {key}: {e}")
+                failed.append(key)
+
+    logger.info(f"Done downloading!")
+    return failed
 
 # ------------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    init_logging(LOG_DIR/"download.log")
     parser = argparse.ArgumentParser(description="Download preprints from bioRxiv S3 bucket")
     parser.add_argument("--n-files", type=int, default=10, help="Number of preprints to download")
     parser.add_argument("--output-dir", type=Path, default="papers", help="Output directory (within dataset dir)")
-    parser.add_argument("--max-workers", type=int, default=10, help="Number of parallel downloads")
+    parser.add_argument("--max-workers", type=int, default=10, help="Number of parallel s3 fetches")
     args = parser.parse_args()
- 
+
     output_dir = DATASET_DIR / args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
- 
-    failed = []
-    for key, files in tqdm(fetch_papers(n=args.n_files, max_workers=args.max_workers),
-                           total=args.n_files, desc="Downloading"):
-        try:
-            save_paper(key, files, output_dir)
-        except Exception as e:
-            failed.append(key)
-            logger.error(f"Save failed for {key}: {e}")
- 
+
+    failed = download_papers(args.n_files, output_dir, max_workers=args.max_workers)
+
     if failed:
         print("Failed files:")
         for f in failed:

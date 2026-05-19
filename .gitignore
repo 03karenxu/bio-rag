@@ -15,5 +15,10 @@ secrets.env
 dataset/
 preprocess_cache/
 backup/
+logs/
+notebooks/
+figures
+
+*.png
 
 .DS_Store
