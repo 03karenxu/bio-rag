@@ -11,10 +11,10 @@ import argparse
 from pathlib import Path
 from tqdm.asyncio import tqdm_asyncio
 
-from utils import init_logging
+from utils.log import init_logging
 from utils.embed import embed_with_retry
-from utils.xml_parser import PaperParser, Paper, Chunk, MEDIA_MARKER
 from utils.image_handling import get_image_paths
+from utils.xml_parser import PaperParser, Paper, Chunk, MEDIA_MARKER
 from config import DATASET_DIR, CACHE_DIR, MAX_CONCURRENT_EMBED, BATCH_MAX_TOKENS, LOG_DIR, MAX_CONCURRENT_PROCESS, COHERE_BATCH_MAX
  
 logger = logging.getLogger(__name__)
@@ -80,10 +80,9 @@ async def _embed_paper(paper: Paper, paper_dir: Path, sem: asyncio.Semaphore) ->
     batches = _make_batches(paper)
     num_batches = len(batches)
     for i, batch in enumerate(batches):
-        logger.info(f"Embedding batch {i+1}/{num_batches} ({len(batch)} items) of {paper_dir.name}...")
         to_embed = [_chunk_to_input(chunk, paper_dir) for chunk in batch]
         embeddings = await embed_with_retry(input_=to_embed, sem=sem)
-        logger.info(f"Done batch {i+1}/{num_batches} of {paper.title}")
+        logger.info(f"Done batch {i+1}/{num_batches} ({len(batch)} items) of {paper.title}")
         for j, chunk in enumerate(batch):
             chunk.embedding = embeddings[j]
 

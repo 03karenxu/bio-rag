@@ -17,7 +17,7 @@ preprocess_cache/
 backup/
 logs/
 notebooks/
-figures
+figures/
 
 *.png
 

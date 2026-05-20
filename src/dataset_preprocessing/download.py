@@ -12,10 +12,9 @@ import argparse
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from utils import init_logging
+from utils.log import init_logging
 from config import DATASET_DIR, COHERE_COMPATIBLE_FORMATS, LOG_DIR
 from utils.image_handling import save_as_png, resize_and_save
 
