@@ -78,13 +78,17 @@ litellm.custom_provider_map = [
     {"provider": "cohere-bedrock", "custom_handler": _adapter}
 ]
 
-async def embed_with_retry(input_: list[str | dict], sem: asyncio.Semaphore) -> list[list[float]]:
+async def embed_with_retry(input_: list[str | dict],
+                           sem: asyncio.Semaphore | None = None,
+                           output_dim: int = EMBED_DIMENSION) -> list[list[float]]:
     retry_delay = EMBED_INIT_DELAY
     for attempt in range(1, MAX_EMBED_ATTEMPTS + 1):
         try:
-            async with sem:
+            async with (sem or asyncio.nullcontext()):
                 logger.info(f"Embedding {len(input_)} items...")
-                resp = await aembedding(model=EMBED_MODEL, input=input_, output_dimension=EMBED_DIMENSION)
+                resp = await aembedding(model=EMBED_MODEL,
+                                        input=input_,
+                                        output_dimension=output_dim)
             logger.info(f"Received {len(input_)} embeddings")
             embeddings = [item["embedding"] for item in resp.data]
             return embeddings

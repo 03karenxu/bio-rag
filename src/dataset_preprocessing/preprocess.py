@@ -12,9 +12,10 @@ from pathlib import Path
 from tqdm.asyncio import tqdm_asyncio
 
 from utils.log import init_logging
+from utils.models import Paper, Chunk
 from utils.embed import embed_with_retry
 from utils.image_handling import get_image_paths
-from utils.xml_parser import PaperParser, Paper, Chunk, MEDIA_MARKER
+from utils.xml_parser import PaperParser, MEDIA_MARKER
 from config import DATASET_DIR, CACHE_DIR, MAX_CONCURRENT_EMBED, BATCH_MAX_TOKENS, LOG_DIR, MAX_CONCURRENT_PROCESS, COHERE_BATCH_MAX
  
 logger = logging.getLogger(__name__)

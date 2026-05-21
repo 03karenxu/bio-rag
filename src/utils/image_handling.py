@@ -59,14 +59,14 @@ def resize_and_save(path: Path, content: bytes) -> None:
 
 def pdf_to_png(content: bytes) -> list[bytes]:
     '''converts a pdf to a series of pngs (one per page)'''
-    doc = fitz.open(stream=content, filetype="pdf")
     results = []
-    for page in doc:
-        with Image.open(BytesIO(page.get_pixmap(dpi=150).tobytes("png"))) as img:
-            img = fit_to_max(img)
-            buf = BytesIO()
-            img.save(buf, format="PNG")
-        results.append(buf.getvalue())
+    with fitz.open(stream=content, filetype="pdf") as doc:
+        for page in doc:
+            with Image.open(BytesIO(page.get_pixmap(dpi=150).tobytes("png"))) as img:
+                img = fit_to_max(img)
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+            results.append(buf.getvalue())
     return results
 
 

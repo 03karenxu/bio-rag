@@ -2,32 +2,12 @@ from __future__ import annotations
  
 import re
 import tiktoken
-from uuid import uuid4
 from pathlib import Path
 from datetime import date
 import xml.etree.ElementTree as ET
-from pydantic import BaseModel, Field
+from utils.models import Paper, Chunk
 from utils.image_handling import estimate_image_tokens, get_image_paths
 from config import MIN_CHUNK_TOKENS, COHERE_TRANSFORMABLE_FORMATS, COHERE_COMPATIBLE_FORMATS
-
-class Paper(BaseModel):
-    title: str
-    doi: str
-    abstract: list[Chunk]
-    keywords: list[str]
-    authors: list[str]
-    date: date
-    categories: list[str]
-    body: list[Chunk]
- 
-
-class Chunk(BaseModel):
-    id: str = Field(default_factory=lambda: uuid4().hex)
-    n_tokens: int
-    section: str
-    text: str
-    embedding: list[float] | None = None
- 
 
 _MEDIA_L = "[[["
 _MEDIA_R = "]]]"
