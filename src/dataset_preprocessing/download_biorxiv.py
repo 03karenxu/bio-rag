@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.logging import init_logging
 from config import DATASET_DIR, COHERE_COMPATIBLE_FORMATS
-from utils.image_processing import save_as_png, resize_and_save
+from utils.image_processing import save_as_jpg, resize_and_save
 
 s3_client = boto3.client("s3", region_name="us-east-1")
 logger = logging.getLogger(__name__)
@@ -178,7 +178,7 @@ def download_paper(key: str, files: dict[str, bytes], output_dir: Path) -> None:
                 resize_and_save(outpath, content)
             elif Path(filename).suffix:
                 try:
-                    save_as_png(outpath, content)
+                    save_as_jpg(outpath, content)
                 except Exception as e:
                     logger.warning(f"Could not convert {filename} to .png, saving as-is: {e}")
                     outpath.write_bytes(content)

@@ -3,6 +3,7 @@ import logging
 import asyncio
 import json
 import boto3
+from botocore.config import Config
 import litellm
 litellm.suppress_debug_info = True
 from litellm.types.utils import Embedding
@@ -17,7 +18,10 @@ class CohereBedrockAdapter(CustomLLM):
     '''
     def __init__(self, model_id: str = "us.cohere.embed-v4:0", region: str = "us-west-2"):
         self.model_id = model_id
-        self.bedrock = boto3.client("bedrock-runtime", region_name=region)
+        self.bedrock = boto3.client(
+            "bedrock-runtime", region_name=region,
+            config=Config(read_timeout=30, connect_timeout=5),
+        )
 
     def _build_body(self, input_: list, **kwargs) -> dict:
         body = {
@@ -91,6 +95,12 @@ async def embed_with_retry(input_: list[str | dict],
             embeddings = [item["embedding"] for item in resp.data]
             return embeddings
         except Exception as e:
+            err_str = str(e)
+            if "Input is too long" in err_str or (
+                "ValidationException" in err_str and "too long" in err_str.lower()
+            ):
+                logger.error(f"Unretryable error for {len(input_)} items (input too long): {e}")
+                raise e
             if attempt == MAX_EMBED_ATTEMPTS:
                 error_message = f"Max retry attempts reached. Skipping {len(input_)} embeddings: {input_}"
                 logger.error(error_message)

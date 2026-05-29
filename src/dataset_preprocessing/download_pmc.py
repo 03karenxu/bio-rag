@@ -26,8 +26,8 @@ def search_pmc(query: str, retmax: int, retstart: int) -> tuple[list[str], int]:
     return ids, total
 
 
-def fetch_full_text(pmcid: str) -> str:
-    r = requests.get(BASE_URL + f"efetch.fcgi?db=pmc&id={pmcid}")
+def fetch_full_text(id: str, db: str) -> str:
+    r = requests.get(BASE_URL + f"efetch.fcgi?db={db}&id={id}")
     return r.text
 
 
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     init_logging("download_pmc.log")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n", type=int, default=100, help="Number of articles to download")
+    parser.add_argument("--n", type=int, default=10, help="Number of articles to download")
     parser.add_argument("--output-dir", default="pmc_xml", help="Directory to save XML files")
     parser.add_argument("--overwrite", type=bool, default=False, help="Overwrite folders?")
     args = parser.parse_args()
@@ -65,7 +65,7 @@ if __name__ == "__main__":
                 xml_path = paper_dir / f"PMC{pmcid}.xml"
 
                 pbar.set_description(f"[{saved+1}/{args.n}] Fetching PMC{pmcid}")
-                xml_text = fetch_full_text(pmcid)
+                xml_text = fetch_full_text(pmcid, "pmc")
                 request_count += 1
                 if request_count % 3 == 0:
                     time.sleep(1)

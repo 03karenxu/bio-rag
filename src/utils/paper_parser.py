@@ -40,7 +40,7 @@ class PaperParser:
     def __init__(self, token_enc_type: str = "cl100k_base"):
         self.TT = tiktoken.get_encoding(token_enc_type)
 
-    def parse_paper(self, xml: Path, media_folder: Path) -> Paper:
+    def parse_paper(self, xml: Path, media_folder: Path | None = None) -> Paper:
         root = ET.parse(xml).getroot()
         if root.tag == "pmc-articleset":
             article = root.find("article")
