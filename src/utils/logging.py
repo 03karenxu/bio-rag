@@ -1,6 +1,9 @@
 import logging
+from config import LOG_DIR
 
 def init_logging(log_file: str | None = None):
+    if log_file:
+        log_file = LOG_DIR / log_file
     handler = logging.FileHandler(log_file, mode="w") if log_file else logging.StreamHandler()
     handler.setFormatter(logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",

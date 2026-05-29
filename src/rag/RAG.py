@@ -4,8 +4,8 @@ import logging
 import numpy as np
 from pathlib import Path
 from config import EMBED_MODEL, ANSWER_MODEL
-from utils.models import Paper
-from utils.embed import embed_with_retry
+from utils.schemas import Paper
+from utils.embeddings import embed_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class RAG:
         self.kb_text = []
         self.kb_embeddings = []
     
-    def ingest(self, preprocessed_file: Path) -> None:
+    async def ingest(self, preprocessed_file: Path) -> None:
         '''
         ingest a preprocessed paper document into the knowledge base
         '''
@@ -57,7 +57,20 @@ class RAG:
         assert len(self.kb_text) == len(self.kb_embeddings)
         logger.info(f"Done ingestion from {preprocessed_file}")
     
+    async def retrieve(self, query: str) -> str:
+        query_embed = await embed_with_retry(input_=[query], output_dim=len(self.kb_embeddings[0]))
 
+        sim_matrix = self._cosine_sim(query_embed)
+        sim_thresh = np.quantile(sim_matrix, self.quantile)
+        sim_indices = np.where(sim_matrix >= sim_thresh)[0]
+        sim_indices = sim_indices[np.argsort(sim_matrix[sim_indices])[::-1]]
+
+        relevant_chunks = [ self.kb_text [i] for i in sim_indices ]
+        logger.info(f"Retrieved {len((relevant_chunks))} relevant chunks")
+        context = "\n\n---\n\n".join(relevant_chunks)
+
+        return context
+    
     async def query(self, query: str, context: str) -> str | None:
         '''
         augments the query using retrieved context from the knowledge base
@@ -80,20 +93,6 @@ class RAG:
         self.kb_text = []
         self.kb_embeddings = []
         logger.info(f"VectorRAG knowledge base cleared")
-
-    async def _retrieve(self, query: str) -> str:
-        query_embed = await embed_with_retry(input_=[query], output_dim=len(self.kb_embeddings[0]))
-
-        sim_matrix = self._cosine_sim(query_embed)
-        sim_thresh = np.quantile(sim_matrix, self.quantile)
-        sim_indices = np.where(sim_matrix >= sim_thresh)[0]
-        sim_indices = sim_indices[np.argsort(sim_matrix[sim_indices])[::-1]]
-
-        relevant_chunks = [ self.kb_text [i] for i in sim_indices ]
-        logger.info(f"Retrieved {len((relevant_chunks))} relevant chunks")
-        context = "\n\n---\n\n".join(relevant_chunks)
-
-        return context
     
     def _cosine_sim(self, query_embed: float):
         return (

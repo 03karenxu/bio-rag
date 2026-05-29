@@ -1,4 +1,4 @@
-from rag_models import RAG
+from rag import RAG
 
 class LeanRAG(RAG):
     ...

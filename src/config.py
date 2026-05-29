@@ -12,7 +12,7 @@ ANSWER_MODEL = _OPUS
 
 # paths
 ROOT = Path(__file__).parent.parent
-DATASET_DIR = ROOT/"dataset"
+DATASET_DIR = ROOT/"datasets"
 SRC = ROOT/"src"
 FIGURES_DIR = ROOT/"figures"
 CACHE_DIR = ROOT/"preprocess_cache"
@@ -20,10 +20,10 @@ LOG_DIR = ROOT/"logs"
 
 # chunking
 MIN_CHUNK_TOKENS = 30
-BATCH_MAX_TOKENS = 10000
+BATCH_MAX_TOKENS = 8000
 
 # embedding
-EMBED_INIT_DELAY = 1
+EMBED_INIT_DELAY = 2
 MAX_EMBED_ATTEMPTS = 5
 EMBED_DIMENSION = 1024 # one of 256, 512, 1024, 1536
 

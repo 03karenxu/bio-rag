@@ -13,6 +13,7 @@ class Paper(BaseModel):
     date: date
     categories: list[str]
     body: list[Chunk]
+    references: list[Reference] = []
 
 class Chunk(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
@@ -20,3 +21,17 @@ class Chunk(BaseModel):
     section: str
     text: str
     embedding: list[float] | None = None
+
+class Reference(BaseModel):
+    ref_id: str
+    authors: list[str] = []
+    title: str = ""
+    pub_type: str = ""
+    journal: str = ""
+    year: int | None = None
+    volume: str = ""
+    pages: str = ""
+    doi: str = ""
+    pmid: str = ""
+    pmcid: str = ""
+    raw_text: str = ""

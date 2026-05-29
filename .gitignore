@@ -12,7 +12,7 @@ wheels/
 .env
 secrets.env
 
-dataset/
+datasets/
 preprocess_cache/
 backup/
 logs/

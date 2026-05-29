@@ -21,11 +21,12 @@ def estimate_image_tokens(path: Path, detail: str = "high") -> int:
     n_tiles = math.ceil(w / 512) * math.ceil(h / 512) + 1
     return n_tiles * 256
 
-def get_image_paths(media_path: Path) -> list[Path]:
-    if media_path.suffix in COHERE_TRANSFORMABLE_FORMATS:
-        return sorted(media_path.parent.glob(f"{media_path.name}_p*.png"))
-    if media_path.suffix in COHERE_COMPATIBLE_FORMATS and media_path.exists():
-        return [media_path]
+def get_image_paths(media_folder: Path, media_file: str) -> list[Path]:
+    stem = Path(media_file).name
+    if Path(media_file).suffix.lower() in COHERE_TRANSFORMABLE_FORMATS:
+        return sorted(media_folder.glob(f"{stem}__*.png"))
+    if Path(media_file).suffix.lower() in COHERE_COMPATIBLE_FORMATS and (media_folder / stem).exists():
+        return [media_folder / stem]
     return []
 
 def is_oversized(img: Image.Image):
@@ -81,14 +82,13 @@ def tif_to_png(content: bytes) -> bytes:
     return buf.getvalue()
 
 
-def save_as_png(filename: str, content: bytes, out_dir: Path) -> None:
+def save_as_png(outpath: Path, content: bytes) -> None:
     '''
     converts a file to PNG(s) and saves to disk.
     '''
-    path = out_dir / filename
-    suffix = Path(filename).suffix.lower()
+    suffix = Path(outpath.name).suffix.lower()
 
-    logger.info(f"Converting {filename} to .png...")
+    logger.info(f"Converting {outpath.name} to .png...")
 
     if suffix == ".pdf":
         png_bytes = pdf_to_png(content)
@@ -98,4 +98,4 @@ def save_as_png(filename: str, content: bytes, out_dir: Path) -> None:
         raise AttributeError(f"Unsupported format {suffix}")
 
     for i, b in enumerate(png_bytes):
-        path.with_stem(f"{path.name}__{i}").with_suffix(".png").write_bytes(b)
+        outpath.with_stem(f"{outpath.name}__{i}").with_suffix(".png").write_bytes(b)
