@@ -216,12 +216,12 @@ if __name__ == "__main__":
     init_logging("download_biorxiv.log")
     parser = argparse.ArgumentParser(description="Download preprints from bioRxiv S3 bucket")
     parser.add_argument("--n-files", type=int, default=10, help="Number of preprints to download")
-    parser.add_argument("--output-dir", type=Path, default="papers", help="Output directory (within dataset dir)")
+    parser.add_argument("--out-dir", type=Path, default="papers", help="Output directory (within dataset dir)")
     parser.add_argument("--max-workers", type=int, default=10, help="Number of parallel s3 fetches")
     parser.add_argument("--s3-folder", required=False, help="The folder to pull from in the s3 bucket")
     args = parser.parse_args()
 
-    output_dir = DATASET_DIR / args.output_dir
+    output_dir = DATASET_DIR / args.out_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     failed = download_papers(args.n_files, output_dir, max_workers=args.max_workers, folder=args.s3_folder)

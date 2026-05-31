@@ -14,9 +14,9 @@ from tqdm.asyncio import tqdm_asyncio
 
 from utils.logging import init_logging
 from utils.schemas import Paper, Chunk
-from utils.embeddings import embed_with_retry
+# from utils.embeddings import embed_with_retry
 from utils.image_processing import get_image_paths
-from utils.paper_parser import PaperParser, MEDIA_MARKER
+from utils.paper_parser import PaperParser, MEDIA_MARKER, MissingContentError
 from config import DATASET_DIR, CACHE_DIR, MAX_CONCURRENT_EMBED, BATCH_MAX_TOKENS, MAX_CONCURRENT_PROCESS, COHERE_BATCH_MAX
  
 logger = logging.getLogger(__name__)
@@ -40,6 +40,8 @@ def _chunk_to_input(chunk: Chunk, media_folder: Path | None) -> dict:
             ext = path.suffix.lstrip(".").lower()
             if ext == "jpg":
                 ext = "jpeg"
+            else:
+                logger.warning(f"NOT JPG: {path}")
             b64 = base64.b64encode(path.read_bytes()).decode()
             content.append({
                 "type": "image_url",
@@ -52,6 +54,8 @@ def _chunk_to_input(chunk: Chunk, media_folder: Path | None) -> dict:
     if after:
         content.append({"type": "text", "text": after})
 
+    logger.debug(content)
+    
     return {"content": content}
 
 
@@ -112,7 +116,7 @@ async def process_paper(xml_path: Path,
     async with process_sem:
         paper = await asyncio.to_thread(parser.parse_paper, xml_path, media_folder)
 
-    paper = await _embed_paper(paper, media_folder, embed_sem)
+    # paper = await _embed_paper(paper, media_folder, embed_sem)
 
     with open(out_path, "w") as f:
         f.write(paper.model_dump_json())

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from pathlib import Path
 from datetime import date
 from pydantic import BaseModel, Field
 
@@ -13,6 +14,7 @@ class Paper(BaseModel):
     date: date
     categories: list[str]
     body: list[Chunk]
+    supp_info: list[Chunk]
     references: list[Reference] = []
 
 class Chunk(BaseModel):

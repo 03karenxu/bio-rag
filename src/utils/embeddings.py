@@ -87,24 +87,31 @@ async def embed_with_retry(input_: list[str | dict],
     retry_delay = EMBED_INIT_DELAY
     for attempt in range(1, MAX_EMBED_ATTEMPTS + 1):
         try:
-            logger.info(f"Embedding {len(input_)} items...")
+            logger.debug(f"Embedding {len(input_)} items...")
             resp = await aembedding(model=EMBED_MODEL,
                                     input=input_,
                                     output_dimension=output_dim)
-            logger.info(f"Received {len(input_)} embeddings")
+            logger.debug(f"Received {len(input_)} embeddings")
             embeddings = [item["embedding"] for item in resp.data]
             return embeddings
         except Exception as e:
             err_str = str(e)
+
+            # don't retry if not rate/throttling error
             if "Input is too long" in err_str or (
                 "ValidationException" in err_str and "too long" in err_str.lower()
             ):
                 logger.error(f"Unretryable error for {len(input_)} items (input too long): {e}")
+                with open("bad_input.jsonl", "w") as f:
+                    for record in input_:
+                        print(json.dumps(record), file=f)
                 raise e
+            
             if attempt == MAX_EMBED_ATTEMPTS:
                 error_message = f"Max retry attempts reached. Skipping {len(input_)} embeddings: {input_}"
                 logger.error(error_message)
                 raise e
+            
             logger.error(f"Embed attempt {attempt} failed for {len(input_)} items. Retrying in {retry_delay}s")
             await asyncio.sleep(retry_delay)
             retry_delay = retry_delay * 2 + random.uniform(0, 1)

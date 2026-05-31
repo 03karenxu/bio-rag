@@ -1,13 +1,14 @@
 from __future__ import annotations
  
 import re
-import tiktoken
 import logging
+import tiktoken
+import xml.etree.ElementTree as ET
+
 from pathlib import Path
 from datetime import date
-import xml.etree.ElementTree as ET
-from dataclasses import dataclass
 from typing import Optional
+from dataclasses import dataclass
 
 from utils.schemas import Paper, Chunk, Reference
 from utils.image_processing import estimate_image_tokens, get_image_paths
@@ -25,16 +26,18 @@ MEDIA_MARKER = re.compile(re.escape(_MEDIA_L) + r'(.+?)' + re.escape(_MEDIA_R))
 _XLINK = "{http://www.w3.org/1999/xlink}href"
 _MEDIA_TAGS = {"graphic", "media", "inline-graphic"}
 _TITLE_TAGS = {"title", "label"}
-_TABLE_MARKER = "table-wrap"
+_TABLE_TAG = "table-wrap"
+_SUPP_MAT_TAG = "supplementary-material"
 
 @dataclass
 class PaperContext:
     root: ET.Element
+    xml_path: Path
     media_folder: Optional[Path] = None
 
 class PaperParser:
     '''
-    parses a preprint xml file from biorxiv into a Paper model
+    parses a paper's xml file into a Paper model
     '''
 
     def __init__(self, token_enc_type: str = "cl100k_base"):
@@ -42,55 +45,59 @@ class PaperParser:
 
     def parse_paper(self, xml: Path, media_folder: Path | None = None) -> Paper:
         root = ET.parse(xml).getroot()
+
+        # pmc articles are wrapped in a pmc-articleset tag
         if root.tag == "pmc-articleset":
             article = root.find("article")
             if article is None:
                 raise MissingContentError("pmc-articleset contains no article element")
             root = article
-        ctx = PaperContext(root=root, media_folder=media_folder)
+
+        ctx = PaperContext(root=root, media_folder=media_folder, xml_path=xml)
 
         return Paper(
-            title=self.get_title(ctx),
-            doi=self.get_doi(ctx),
-            abstract=self.get_abstract(ctx),
-            keywords=self.get_keywords(ctx),
-            authors=self.get_authors(ctx),
-            date=self.get_date("accepted", ctx) or self.get_date("received", ctx) or self.get_date("published", ctx),
-            categories=self.get_categories(ctx),
-            body=self.get_body(ctx),
-            references=self.get_references(ctx),
+            title=self._get_title(ctx),
+            doi=self._get_doi(ctx),
+            abstract=self._get_abstract(ctx),
+            keywords=self._get_keywords(ctx),
+            authors=self._get_authors(ctx),
+            date=self._get_date("accepted", ctx) or self._get_date("received", ctx) or self._get_date("published", ctx),
+            categories=self._get_categories(ctx),
+            body=self._get_body(ctx),
+            supp_info=self._get_supp_info(ctx),
+            references=self._get_references(ctx),
         )
 
-    def get_title(self, ctx: PaperContext) -> str:
+    def _get_title(self, ctx: PaperContext) -> str:
         e = ctx.root.find("front/article-meta/title-group/article-title") or ctx.root.find(".//article-title")
         return self._get_all_text_with_media(e, ctx.media_folder)
 
-    def get_doi(self, ctx: PaperContext) -> str:
+    def _get_doi(self, ctx: PaperContext) -> str:
         e = (
             ctx.root.find("./front/article-meta/article-id[@pub-id-type='doi']") or
             ctx.root.find(".//article-id[@pub-id-type='doi']")
         )
         return self._get_all_text_with_media(e, ctx.media_folder)
 
-    def get_abstract(self, ctx: PaperContext) -> list[Chunk]:
+    def _get_abstract(self, ctx: PaperContext) -> list[Chunk]:
         abstract = ctx.root.find(".//abstract")
         if abstract is None:
-            raise MissingContentError("no abstract")
+            raise MissingContentError(f"No abstract in {ctx.xml_path}")
         return self._merge_small_chunks(self._process_section(abstract, ctx))
 
-    def get_categories(self, ctx: PaperContext) -> list[str]:
+    def _get_categories(self, ctx: PaperContext) -> list[str]:
         return [s.text for s in ctx.root.findall(".//subj-group/subject") if s.text]
 
-    def get_keywords(self, ctx: PaperContext) -> list[str]:
+    def _get_keywords(self, ctx: PaperContext) -> list[str]:
         return [t for kwd in ctx.root.findall(".//kwd") if (t := self._get_all_text_with_media(kwd, ctx.media_folder))]
 
-    def get_authors(self, ctx: PaperContext) -> list[str]:
+    def _get_authors(self, ctx: PaperContext) -> list[str]:
         return [
             f"{self._get_all_text_with_media(c.find('name/surname'), ctx.media_folder)}, {self._get_all_text_with_media(c.find('name/given-names'), ctx.media_folder)}".strip(", ")
             for c in ctx.root.findall(".//contrib[@contrib-type='author']")
         ]
 
-    def get_date(self, date_type: str, ctx: PaperContext) -> date | None:
+    def _get_date(self, date_type: str, ctx: PaperContext) -> date | None:
         if date_type == "published":
             return self._get_pub_date(ctx)
 
@@ -106,13 +113,13 @@ class PaperParser:
         except (TypeError, ValueError):
             return None
 
-    def get_body(self, ctx: PaperContext) -> list[Chunk]:
+    def _get_body(self, ctx: PaperContext) -> list[Chunk]:
         body = ctx.root.find(".//body")
         if body is None:
-            raise MissingContentError("no body")
+            raise MissingContentError(f"No body in {ctx.xml_path}")
         return self._merge_small_chunks(self._process_section(body, ctx))
 
-    def get_references(self, ctx: PaperContext) -> list[Reference]:
+    def _get_references(self, ctx: PaperContext) -> list[Reference]:
         refs = []
         for ref in ctx.root.findall(".//ref-list/ref"):
             ref_id = ref.get("id", "")
@@ -125,48 +132,23 @@ class PaperParser:
                     refs.append(self._parse_mixed_citation(ref_id, mc))
         return refs
 
-    # --------------------------------------------------------------------------
-
     def _merge_small_chunks(self, chunks: list[Chunk]) -> list[Chunk]:
-        merged = []
+        merged: list[Chunk] = []
         for chunk in chunks:
-            chunk = self._remove_incompatible_media(chunk)
             if chunk is None:
                 continue
-            has_graphic = bool(MEDIA_MARKER.search(chunk.text))
-            if chunk.n_tokens < MIN_CHUNK_TOKENS and not has_graphic and merged:
+            if chunk.n_tokens < MIN_CHUNK_TOKENS and merged:
                 prev = merged[-1]
                 prev.text += " " + chunk.text.strip()
                 prev.n_tokens += chunk.n_tokens
             else:
                 merged.append(chunk.model_copy())
+
+        if len(merged) == 1 and merged[0].n_tokens < MIN_CHUNK_TOKENS:
+            return []
+        
         return merged
-
-    def _remove_incompatible_media(self, chunk: Chunk) -> Chunk | None:
-        markers = list(MEDIA_MARKER.finditer(chunk.text))
-        if not markers:
-            return chunk
-        
-        incompatible = [
-            m for m in markers
-            if Path(m.group(1)).suffix.lower() not in COHERE_TRANSFORMABLE_FORMATS | COHERE_COMPATIBLE_FORMATS
-        ]
-
-        if not incompatible:
-            return chunk
-
-        # chunk contains cohere-incompatible media
-
-        if chunk.n_tokens < MIN_CHUNK_TOKENS:
-            # small chunk containing only incompatible material, discard
-            return None
-        
-        # chunk contains incompatible material but also text, keep text and remove marker
-        text = chunk.text
-        for m in reversed(incompatible):
-            text = text[:m.start()] + text[m.end():]
-        text = " ".join(text.split())
-        return chunk.model_copy(update={"text": text, "n_tokens": len(self.TT.encode(text))})
+    
 
     def _get_pub_date(self, ctx: PaperContext) -> date | None:
         for node in ctx.root.findall(".//pub-date"):
@@ -180,7 +162,38 @@ class PaperParser:
                 continue
         return None
     
+    def _get_supp_info(self, ctx: PaperContext) -> list[Chunk]:
+        secs = ctx.root.findall(".//sec[@sec-type=\"supplementary-material\"]")
+
+        chunks = []
+        for sec in secs:
+            title_elem = sec.find("title")
+            title = " ".join(self._get_all_text_with_media(title_elem, ctx.media_folder).split()).strip()
+
+            chunks = []
+            for child in sec:
+                if child.tag == _TABLE_TAG:
+                    text = self._table_to_markdown(child, ctx.media_folder)
+                elif child.tag not in _TITLE_TAGS:
+                    text = " ".join(self._get_all_text_with_media(child, ctx.media_folder).split())
+                else:
+                    continue
+
+                if text:
+                    full_text = f"Section: {title} Content: {text}"
+                    n_tokens = len(self.TT.encode(full_text)) + (sum(
+                        estimate_image_tokens(path)
+                        for m in MEDIA_MARKER.finditer(text)
+                        for path in get_image_paths(ctx.media_folder, m.group(1))
+                    ) if ctx.media_folder else 0)
+                    chunks.append(Chunk(n_tokens=n_tokens, section=title, text=text))
+
+        return self._merge_small_chunks(chunks)
+
     def _process_section(self, sec: ET.Element, ctx: PaperContext, parent_title: str | None = None) -> list[Chunk]:
+        if sec.get("sec-type") == "supplementary-material":
+            return []
+        
         title_elem = sec.find("title")
         title = " ".join(self._get_all_text_with_media(title_elem, ctx.media_folder).split()).strip()
         full_title = f"{parent_title} > {title}" if parent_title else title
@@ -190,12 +203,15 @@ class PaperParser:
             if child.tag == "sec":
                 chunks.extend(self._process_section(child, ctx, full_title))
                 continue
-            elif child.tag == _TABLE_MARKER:
+            elif child.tag == _TABLE_TAG:
                 text = self._table_to_markdown(child, ctx.media_folder)
             elif child.tag not in _TITLE_TAGS:
                 text = " ".join(self._get_all_text_with_media(child, ctx.media_folder).split())
+            elif child.tag == _SUPP_MAT_TAG:
+                return []
             else:
                 continue
+
             if text:
                 full_text = f"Section: {full_title} Content: {text}"
                 n_tokens = len(self.TT.encode(full_text)) + (sum(
@@ -204,6 +220,7 @@ class PaperParser:
                     for path in get_image_paths(ctx.media_folder, m.group(1))
                 ) if ctx.media_folder else 0)
                 chunks.append(Chunk(n_tokens=n_tokens, section=full_title, text=text))
+
         return chunks
 
     def _parse_element_citation(self, ref_id: str, ec: ET.Element) -> Reference:
@@ -339,15 +356,19 @@ class PaperParser:
             parts.append(e.text)
         for child in e:
             if child.tag in _MEDIA_TAGS and _XLINK in child.attrib:
+                # add inline marker for media files
                 img_name = Path(child.attrib[_XLINK]).name
-                if media_folder:
+                if media_folder and Path(img_name).suffix in COHERE_COMPATIBLE_FORMATS.union(COHERE_TRANSFORMABLE_FORMATS):
+                    # to create marker, media folder must be provided and file must be compatible with cohere (either as-is or converted)
                     parts.append(f"{_MEDIA_L}{img_name}{_MEDIA_R}")
-            elif child.tag == _TABLE_MARKER:
+            elif child.tag == _TABLE_TAG:
+                # convert table to markdown
                 parts.append(self._table_to_markdown(child, media_folder))
             else:
                 parts.append(self._get_all_text_with_media(child, media_folder))
             if child.tail:
                 parts.append(child.tail)
+
         return "".join(parts)
 
 

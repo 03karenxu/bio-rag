@@ -22,12 +22,17 @@ def estimate_image_tokens(path: Path, detail: str = "high") -> int:
     return n_tiles * 256
 
 def get_image_paths(media_folder: Path, media_file: str) -> list[Path]:
+    paths = []
     stem = Path(media_file).name
     if Path(media_file).suffix.lower() in COHERE_TRANSFORMABLE_FORMATS:
-        return sorted(media_folder.glob(f"{stem}__*.jpg"))
-    if Path(media_file).suffix.lower() in COHERE_COMPATIBLE_FORMATS and (media_folder / stem).exists():
-        return [media_folder / stem]
-    return []
+        paths = sorted(media_folder.glob(f"{stem}__*.jpg"))
+    if Path(media_file).suffix.lower() in COHERE_COMPATIBLE_FORMATS:
+        jpg_path = (media_folder / stem).with_suffix(".jpg")
+        if jpg_path.exists():
+            paths = [jpg_path]
+
+    logger.debug(f"Found {len(paths)} path(s) for file: {media_file}")
+    return paths
 
 def is_oversized(img: Image.Image):
     '''
@@ -55,8 +60,7 @@ def resize_and_save(path: Path, content: bytes) -> None:
     '''
     img = Image.open(BytesIO(content))
     img = fit_to_max(img)
-    img.convert("RGB").save(path, format="JPEG", quality=85)
-
+    img.convert("RGB").save(path.with_suffix(".jpg"), format="JPEG", quality=85)
 
 def pdf_to_jpg(content: bytes) -> list[bytes]:
     '''converts a pdf to a series of jpgs (one per page)'''
@@ -70,7 +74,6 @@ def pdf_to_jpg(content: bytes) -> list[bytes]:
             results.append(buf.getvalue())
     return results
 
-
 def tif_to_jpg(content: bytes) -> bytes:
     '''also works for tiff'''
     with Image.open(BytesIO(content)) as img:
@@ -79,7 +82,6 @@ def tif_to_jpg(content: bytes) -> bytes:
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=85)
     return buf.getvalue()
-
 
 def save_as_jpg(outpath: Path, content: bytes) -> None:
     '''
