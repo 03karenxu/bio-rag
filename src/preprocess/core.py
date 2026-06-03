@@ -6,7 +6,7 @@ from pathlib import Path
 from utils.schemas import Paper, Chunk
 from utils.embedding import embed_with_retry
 from preprocess.img_processing import get_image_paths
-from preprocess.paper_parser import PaperParser, MEDIA_MARKER
+from preprocess.xml_parsing import PaperParser, MEDIA_MARKER
 from config import BATCH_MAX_TOKENS, COHERE_BATCH_MAX
  
 logger = logging.getLogger(__name__)

@@ -6,7 +6,7 @@ from pathlib import Path
 from tqdm.asyncio import tqdm_asyncio
 from utils.logging import init_logging
 from preprocess.core import process_paper
-from preprocess.paper_parser import PaperParser
+from preprocess.xml_parsing import PaperParser
 from config import MAX_CONCURRENT_EMBED, MAX_CONCURRENT_PROCESS, DATASET_DIR, CACHE_DIR
 
 logger = logging.getLogger(__name__)

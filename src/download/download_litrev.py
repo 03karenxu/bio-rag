@@ -9,7 +9,7 @@ from utils.schemas import Paper
 from utils.logging import init_logging
 from download.core import download_paper
 from download.fetchers.pmc import PMCFetcher
-from preprocess.paper_parser import PaperParser
+from preprocess.xml_parsing import PaperParser
 from download.fetchers.scihub import ScihubFetcher
 
 logger = logging.getLogger(__name__)
