@@ -7,7 +7,7 @@ from tqdm import tqdm
 from config import DATASET_DIR
 from utils.schemas import Paper
 from utils.logging import init_logging
-from download.core import Downloader
+from download.core import download_paper
 from download.fetchers.pmc import PMCFetcher
 from preprocess.paper_parser import PaperParser
 from download.fetchers.scihub import ScihubFetcher
@@ -33,7 +33,6 @@ if __name__ == "__main__":
     pmc = PMCFetcher()
     parser = PaperParser()
     scihub = ScihubFetcher()
-    downloader = Downloader()
 
     total_saved = total_skipped = total_failed = 0
 
@@ -42,12 +41,12 @@ if __name__ == "__main__":
         paper_dir.mkdir(parents=True, exist_ok=True)
 
         # download literature review paper
-        downloader.download_paper(paper=paper, out_dir=paper_dir, wrap_main_file=True)
+        download_paper(paper=paper, out_dir=paper_dir, wrap_main_file=True)
 
         # download referenced papers
         paper_fn, xml_bytes = paper.main_file
         parsed: Paper = parser.parse_paper(xml=xml_bytes.decode())
-        
+
         refs_dir = paper_dir / "refs"
         refs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -64,7 +63,7 @@ if __name__ == "__main__":
 
             try:
                 ref_paper = pmc.fetch_by_pmcid(ref.pmcid) if ref.pmcid else scihub.fetch_by_doi(ref.doi)
-                downloader.download_paper(paper=ref_paper, out_dir=refs_dir)
+                download_paper(paper=ref_paper, out_dir=refs_dir)
                 total_saved += 1
             except Exception as e:
                 logger.error(f"Could not download ref '{ref.title}' in {paper_fn}: {e}")

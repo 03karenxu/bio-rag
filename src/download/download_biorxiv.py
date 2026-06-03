@@ -2,7 +2,7 @@ import logging
 import argparse
 from pathlib import Path
 from config import DATASET_DIR
-from download.core import Downloader
+from download.core import download_paper
 from utils.logging import init_logging
 from download.fetchers.biorxiv import BiorxivFetcher
 
@@ -20,13 +20,13 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     biorxiv = BiorxivFetcher(args.s3_folder)
-    dwnld = Downloader()
+
     failed: list[str] = []
     for paper in biorxiv.fetch_by_count(n=args.n):
         paper_dir = output_dir / paper.identifier.replace("/", "_")
         paper_dir.mkdir(parents=True, exist_ok=True)
         try:
-            dwnld.download_paper(paper=paper, out_dir=paper_dir, wrap_main_file=True)
+            download_paper(paper=paper, out_dir=paper_dir, wrap_main_file=True)
         except Exception as e:
             logger.warning(f"Could not download paper {paper.identifier}, skipping: {e}")
             failed.append(paper.identifier)
