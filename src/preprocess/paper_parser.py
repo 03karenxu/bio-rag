@@ -11,7 +11,7 @@ from typing import Optional
 from dataclasses import dataclass
 
 from utils.schemas import Paper, Chunk, Reference
-from utils.image_processing import estimate_image_tokens, get_image_paths
+from preprocess.img_processing import estimate_image_tokens, get_image_paths
 from config import MIN_CHUNK_TOKENS, COHERE_TRANSFORMABLE_FORMATS, COHERE_COMPATIBLE_FORMATS
 
 logger = logging.getLogger()
@@ -43,8 +43,13 @@ class PaperParser:
     def __init__(self, token_enc_type: str = "cl100k_base"):
         self.TT = tiktoken.get_encoding(token_enc_type)
 
-    def parse_paper(self, xml: Path, media_folder: Path | None = None) -> Paper:
-        root = ET.parse(xml).getroot()
+    def parse_paper(self, xml: Path | str, media_folder: Path | None = None) -> Paper:
+        if isinstance(xml, Path):
+            root = ET.parse(xml).getroot()
+        elif isinstance(xml, str):
+            root = ET.fromstring(xml)
+        else:
+            raise ValueError(f"parse_paper expects xml Path or string, not {type(xml)}")
 
         # pmc articles are wrapped in a pmc-articleset tag
         if root.tag == "pmc-articleset":
@@ -70,7 +75,8 @@ class PaperParser:
 
     def _get_title(self, ctx: PaperContext) -> str:
         e = ctx.root.find("front/article-meta/title-group/article-title") or ctx.root.find(".//article-title")
-        return self._get_all_text_with_media(e, ctx.media_folder)
+        title = " ".join(self._get_all_text_with_media(e, ctx.media_folder).split()).strip()
+        return title
 
     def _get_doi(self, ctx: PaperContext) -> str:
         e = (
@@ -370,5 +376,3 @@ class PaperParser:
                 parts.append(child.tail)
 
         return "".join(parts)
-
-

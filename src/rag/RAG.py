@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from config import EMBED_MODEL, ANSWER_MODEL
 from utils.schemas import Paper
-from utils.embeddings import embed_with_retry
+from utils.embedding import embed_with_retry
 
 logger = logging.getLogger(__name__)
 

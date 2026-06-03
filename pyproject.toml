@@ -8,6 +8,7 @@ dependencies = [
     "boto3>=1.42.97",
     "bs4>=0.0.2",
     "dspy>=2.6.27",
+    "grobid-client-python>=0.1.4",
     "litellm>=1.83.0",
     "matplotlib>=3.9.4",
     "nbformat>=5.10.4",
