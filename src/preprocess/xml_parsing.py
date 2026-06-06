@@ -1,378 +1,433 @@
 from __future__ import annotations
- 
+
 import re
 import logging
-import tiktoken
-import xml.etree.ElementTree as ET
-
 from pathlib import Path
 from datetime import date
-from typing import Optional
-from dataclasses import dataclass
+import xml.etree.ElementTree as ET
+from nltk.tokenize import PunktSentenceTokenizer
+from nltk.tokenize.punkt import PunktParameters
+from utils.schemas import (
+    ContentItem,
+    TextSpan,
+    TableSpan,
+    MediaSpan,
+    ListSpan,
+    Paper,
+    Section,
+    Reference,
+    PaperBack,
+    PaperFront
+)
 
-from utils.schemas import Paper, Chunk, Reference
-from preprocess.img_processing import estimate_image_tokens, get_image_paths
-from config import MIN_CHUNK_TOKENS, COHERE_TRANSFORMABLE_FORMATS, COHERE_COMPATIBLE_FORMATS
+punkt_params = PunktParameters()
+punkt_params.abbrev_types = {"fig", "figs", "et al", "e.g", "i.e", "vs", "c.a", "approx", "dept"}
+tokenizer = PunktSentenceTokenizer(punkt_params)
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 class MissingContentError(ValueError):
-    pass
-
-_MEDIA_L = "[[["
-_MEDIA_R = "]]]"
-MEDIA_MARKER = re.compile(re.escape(_MEDIA_L) + r'(.+?)' + re.escape(_MEDIA_R))
+    '''raise when expected xml elements are missing'''
 
 _XLINK = "{http://www.w3.org/1999/xlink}href"
-_MEDIA_TAGS = {"graphic", "media", "inline-graphic"}
+_MEDIA_TAGS = {"graphic", "media", "inline-graphic", "fig"}
 _TITLE_TAGS = {"title", "label"}
-_TABLE_TAG = "table-wrap"
-_SUPP_MAT_TAG = "supplementary-material"
 
-@dataclass
-class PaperContext:
-    root: ET.Element
-    xml_path: Path
-    media_folder: Optional[Path] = None
+## main ##
 
-class PaperParser:
-    '''
-    parses a paper's xml file into a Paper model
-    '''
+def parse_file(path: Path) -> Paper:
+    logger.info("Parsing {path}...")
+    tree = ET.parse(path)
+    root = tree.getroot()
+    article = root.find("article")
+    return _parse_article(article) if article is not None else _parse_article(root)
 
-    def __init__(self, token_enc_type: str = "cl100k_base"):
-        self.TT = tiktoken.get_encoding(token_enc_type)
+def parse_string(xml_text: str) -> Paper:
+    root = ET.fromstring(xml_text)
+    article = root.find("article")
+    return _parse_article(article) if article is not None else _parse_article(root)
 
-    def parse_paper(self, xml: Path | str, media_folder: Path | None = None) -> Paper:
-        if isinstance(xml, Path):
-            root = ET.parse(xml).getroot()
-        elif isinstance(xml, str):
-            root = ET.fromstring(xml)
+## main helper ##
+
+def _parse_article(article: ET.Element) -> Paper:
+    front_el = article.find("front")
+    body_el = article.find("body")
+    back_el = article.find("back")
+
+    front = _parse_front(front_el)
+    back = _parse_back(back_el)
+    body = _parse_body(body_el)
+
+    return Paper(front=front, back=back, body=body)
+
+## parse front matter ##
+
+def _parse_front(front: ET.Element | None) -> PaperFront:
+    if front is None: raise MissingContentError("No front tag found")
+
+    meta = front.find("article-meta")
+    if meta is None: raise MissingContentError("No meta tag found")
+    
+    title = _find_title(meta)
+    doi = _find_pub_id(meta, "doi")
+    authors = _parse_authors(meta)
+    keywords = _parse_keywords(meta)
+    categories = _parse_categories(meta)
+    pub_date = _parse_date(meta)
+    abstract = _parse_abstract(meta)
+
+    return PaperFront(
+        title=title,
+        doi=doi,
+        abstract=abstract,
+        keywords=keywords,
+        authors=authors,
+        date=pub_date,
+        categories=categories,
+    )
+
+def _find_title(meta: ET.Element) -> str:
+    el = meta.find(".//article-title")
+    if el is not None: return _element_text(el)
+    logger.warning("No article-title found")
+    return ""
+
+def _find_pub_id(meta: ET.Element, id_type: str) -> str:
+    for el in meta.findall("article-id"):
+        if el.get("pub-id-type") == id_type:
+            return el.text.strip()
+    logger.warning("No pub-id found")
+    return ""
+
+def _parse_authors(meta: ET.Element) -> list[str]:
+    authors = []
+    for contrib in meta.findall(".//contrib[@contrib-type='author']"):
+        name_el = contrib.find("name")
+        if name_el is not None:
+            surname = name_el.findtext("surname", "").strip()
+            given = name_el.findtext("given-names", "").strip()
+            if surname and given:
+                authors.append(f"{surname}, {given}".strip())
+            else:
+                logger.warning("Could not find surname and given name for author.")
         else:
-            raise ValueError(f"parse_paper expects xml Path or string, not {type(xml)}")
-
-        # pmc articles are wrapped in a pmc-articleset tag
-        if root.tag == "pmc-articleset":
-            article = root.find("article")
-            if article is None:
-                raise MissingContentError("pmc-articleset contains no article element")
-            root = article
-
-        ctx = PaperContext(root=root, media_folder=media_folder, xml_path=xml)
-
-        return Paper(
-            title=self._get_title(ctx),
-            doi=self._get_doi(ctx),
-            abstract=self._get_abstract(ctx),
-            keywords=self._get_keywords(ctx),
-            authors=self._get_authors(ctx),
-            date=self._get_date("accepted", ctx) or self._get_date("received", ctx) or self._get_date("published", ctx),
-            categories=self._get_categories(ctx),
-            body=self._get_body(ctx),
-            supp_info=self._get_supp_info(ctx),
-            references=self._get_references(ctx),
-        )
-
-    def _get_title(self, ctx: PaperContext) -> str:
-        e = ctx.root.find("front/article-meta/title-group/article-title") or ctx.root.find(".//article-title")
-        title = " ".join(self._get_all_text_with_media(e, ctx.media_folder).split()).strip()
-        return title
-
-    def _get_doi(self, ctx: PaperContext) -> str:
-        e = (
-            ctx.root.find("./front/article-meta/article-id[@pub-id-type='doi']") or
-            ctx.root.find(".//article-id[@pub-id-type='doi']")
-        )
-        return self._get_all_text_with_media(e, ctx.media_folder)
-
-    def _get_abstract(self, ctx: PaperContext) -> list[Chunk]:
-        abstract = ctx.root.find(".//abstract")
-        if abstract is None:
-            raise MissingContentError(f"No abstract in {ctx.xml_path}")
-        return self._merge_small_chunks(self._process_section(abstract, ctx))
-
-    def _get_categories(self, ctx: PaperContext) -> list[str]:
-        return [s.text for s in ctx.root.findall(".//subj-group/subject") if s.text]
-
-    def _get_keywords(self, ctx: PaperContext) -> list[str]:
-        return [t for kwd in ctx.root.findall(".//kwd") if (t := self._get_all_text_with_media(kwd, ctx.media_folder))]
-
-    def _get_authors(self, ctx: PaperContext) -> list[str]:
-        return [
-            f"{self._get_all_text_with_media(c.find('name/surname'), ctx.media_folder)}, {self._get_all_text_with_media(c.find('name/given-names'), ctx.media_folder)}".strip(", ")
-            for c in ctx.root.findall(".//contrib[@contrib-type='author']")
-        ]
-
-    def _get_date(self, date_type: str, ctx: PaperContext) -> date | None:
-        if date_type == "published":
-            return self._get_pub_date(ctx)
-
-        node = ctx.root.find(f".//history/date[@date-type='{date_type}']")
-        if node is None:
-            return None
-        try:
-            return date(
-                year=int(node.findtext("year")),
-                month=int(node.findtext("month")),
-                day=int(node.findtext("day")),
-            )
-        except (TypeError, ValueError):
-            return None
-
-    def _get_body(self, ctx: PaperContext) -> list[Chunk]:
-        body = ctx.root.find(".//body")
-        if body is None:
-            raise MissingContentError(f"No body in {ctx.xml_path}")
-        return self._merge_small_chunks(self._process_section(body, ctx))
-
-    def _get_references(self, ctx: PaperContext) -> list[Reference]:
-        refs = []
-        for ref in ctx.root.findall(".//ref-list/ref"):
-            ref_id = ref.get("id", "")
-            ec = ref.find(".//element-citation")
-            if ec is not None:
-                refs.append(self._parse_element_citation(ref_id, ec))
-            else:
-                mc = ref.find(".//mixed-citation")
-                if mc is not None:
-                    refs.append(self._parse_mixed_citation(ref_id, mc))
-        return refs
-
-    def _merge_small_chunks(self, chunks: list[Chunk]) -> list[Chunk]:
-        merged: list[Chunk] = []
-        for chunk in chunks:
-            if chunk is None:
-                continue
-            if chunk.n_tokens < MIN_CHUNK_TOKENS and merged:
-                prev = merged[-1]
-                prev.text += " " + chunk.text.strip()
-                prev.n_tokens += chunk.n_tokens
-            else:
-                merged.append(chunk.model_copy())
-
-        if len(merged) == 1 and merged[0].n_tokens < MIN_CHUNK_TOKENS:
-            return []
-        
-        return merged
+            logger.warning("Could not find name tag in contrib")
     
+    return authors
 
-    def _get_pub_date(self, ctx: PaperContext) -> date | None:
-        for node in ctx.root.findall(".//pub-date"):
+def _parse_keywords(meta: ET.Element) -> list[str]:
+    keywords = [
+        kwd.text.strip()
+        for kwd in (meta.findall(".//kwd"))
+        if kwd.text
+    ]
+
+    if not keywords:
+        logger.warning("No keywords found")
+
+    return keywords
+
+def _parse_categories(meta: ET.Element) -> list[str]:
+    categories= [
+        subj.text.strip()
+        for subj in (meta.findall(".//subject"))
+        if subj.text
+    ]
+
+    if not categories:
+        logger.warning("No categories found")
+    
+    return categories
+
+def _parse_date(meta: ET.Element) -> date | None:
+    '''
+    gets epub date, otherwise gets date received
+    '''
+    epub_el = meta.find(".//pub-date[@pub-type='epub']")
+    date_el = meta.find(".//date[@date-type='received']")
+
+    for el in [epub_el, date_el]:
+        if el is None: continue
+        year = el.findtext("year")
+        month = el.findtext("month", "1")
+        day = el.findtext("day", "1")
+        if year:
             try:
-                return date(
-                    year=int(node.findtext("year")),
-                    month=int(node.findtext("month") or 1),
-                    day=int(node.findtext("day") or 1),
-                )
-            except (TypeError, ValueError):
-                continue
-        return None
+                return date(int(year), int(month), int(day))
+            except ValueError:
+                logger.warning(f"Could not form date from {year}, {month}, {day}")
+        else:
+            logger.warning("No year found")
+
+    logger.warning("No epub or received date found")
+    return None
+
+def _parse_abstract(meta: ET.Element) -> Section:
+    abstract_el = meta.find("abstract")
+    if abstract_el is None:
+        raise MissingContentError(f"No abstract tag found")
+    return _parse_section(abstract_el)
+
+## body ##
+
+def _parse_body(body: ET.Element | None) -> list[Section]:
+    if body is None:
+        raise MissingContentError("No body tag found")
+    all_secs: list[Section] = []
+    for sec in body.findall("sec"):
+        sec: Section = _parse_section(sec)
+        if sec: all_secs.append(sec)
+
+    return all_secs
+
+def _parse_section(sec: ET.Element) -> Section | None:
+    if sec.get("sec-type", "") == "supplementary-material": return None
+
+    # get section title
+    title_el = sec.find("title")
+    if title_el is None: logger.warning("No title tag found in sec")
+    section_title = _element_text(title_el)
+
+    # process section children
+    sec_items = []
+    for child in sec:
+        tag = child.tag
+        if tag in _TITLE_TAGS: continue
+        if tag == "sec":
+            item: Section = _parse_section(child)
+            if item: sec_items.append(item)
+        elif tag == "p":
+            items: list[ContentItem] = _parse_paragraph_element(child)
+            if items: sec_items.extend(items)
+        elif tag in _MEDIA_TAGS:
+            item: MediaSpan = _parse_fig(child)
+            if item: sec_items.append(item)
+        elif tag == "table-wrap":
+            items: list[TableSpan | MediaSpan] = _parse_table_wrap(child)
+            if items: sec_items.extend(items)
+        elif tag == "list":
+            item: ListSpan = _parse_list(child)
+            if item: sec_items.append(item)
     
-    def _get_supp_info(self, ctx: PaperContext) -> list[Chunk]:
-        secs = ctx.root.findall(".//sec[@sec-type=\"supplementary-material\"]")
+    return Section(header=section_title, content=sec_items)
 
-        chunks = []
-        for sec in secs:
-            title_elem = sec.find("title")
-            title = " ".join(self._get_all_text_with_media(title_elem, ctx.media_folder).split()).strip()
+## paragraph / in-line content ##
 
-            chunks = []
-            for child in sec:
-                if child.tag == _TABLE_TAG:
-                    text = self._table_to_markdown(child, ctx.media_folder)
-                elif child.tag not in _TITLE_TAGS:
-                    text = " ".join(self._get_all_text_with_media(child, ctx.media_folder).split())
-                else:
-                    continue
+def _parse_paragraph_element(el: ET.Element) -> list[TextSpan]:
 
-                if text:
-                    full_text = f"Section: {title} Content: {text}"
-                    n_tokens = len(self.TT.encode(full_text)) + (sum(
-                        estimate_image_tokens(path)
-                        for m in MEDIA_MARKER.finditer(text)
-                        for path in get_image_paths(ctx.media_folder, m.group(1))
-                    ) if ctx.media_folder else 0)
-                    chunks.append(Chunk(n_tokens=n_tokens, section=title, text=text))
+    # collect text and xrefs
+    texts: list[str] = []
+    xrefs: dict[str, str] = {} # {rid: ref_type}
+    def collect(node: ET.Element) -> None:
+        # collect text before first child tag
+        if node.text: texts.append(node.text.strip())
+        for child in node:
+            if child.tag == "xref" and child.get("ref-type") in {"bibr", "fig", "table"}:
+                # append xref inner text to texts
+                if child.text: texts.append(child.text.strip())
 
-        return self._merge_small_chunks(chunks)
+                rid = child.get("rid", "")
+                if not rid: logger.warning("No rid found")
+                ref_type = child.get("ref-type")
 
-    def _process_section(self, sec: ET.Element, ctx: PaperContext, parent_title: str | None = None) -> list[Chunk]:
-        if sec.get("sec-type") == "supplementary-material":
-            return []
+                # store temp marker
+                texts.append(f"###{rid}###")
+
+                # store ref info
+                xrefs[rid] = ref_type
+                
+                if child.tail: texts.append(child.tail.strip())
+            elif child.tag != "sup":
+                collect(child)
+                if child.tail: texts.append(child.tail.strip())
+            else:
+                if child.tail: texts.append(child.tail.strip())
+    collect(el)
+
+    # convert texts to flat text with xref markers
+    normalised_texts = [ " ".join(text.split()) for text in texts]
+    flat_text = " ".join(normalised_texts)
+
+    # split full text on sentences
+    sentences = tokenizer.tokenize(flat_text)
+
+    # for each sentence, create TextSpan
+    text_spans: list[TextSpan] = []
+    for s in sentences:
+        matches = re.findall(r"###([^#]+)###", s)
+        # remove temp markers from text
+        stripped_s = " ".join(re.sub(r"###[^#]+###", "", s).split())
+        table_ids = [rid for rid in matches if xrefs[rid] == "table"]
+        fig_ids   = [rid for rid in matches if xrefs[rid] == "fig"]
+        ref_ids   = [rid for rid in matches if xrefs[rid] == "bibr"]
+
+        text_spans.append(TextSpan(text=stripped_s, table_ids=table_ids, fig_ids=fig_ids, ref_ids=ref_ids))
         
-        title_elem = sec.find("title")
-        title = " ".join(self._get_all_text_with_media(title_elem, ctx.media_folder).split()).strip()
-        full_title = f"{parent_title} > {title}" if parent_title else title
+    return text_spans
 
-        chunks = []
-        for child in sec:
-            if child.tag == "sec":
-                chunks.extend(self._process_section(child, ctx, full_title))
-                continue
-            elif child.tag == _TABLE_TAG:
-                text = self._table_to_markdown(child, ctx.media_folder)
-            elif child.tag not in _TITLE_TAGS:
-                text = " ".join(self._get_all_text_with_media(child, ctx.media_folder).split())
-            elif child.tag == _SUPP_MAT_TAG:
-                return []
-            else:
-                continue
+def _parse_fig(fig: ET.Element) -> MediaSpan:
+    fig_id = fig.get("id", "")
 
-            if text:
-                full_text = f"Section: {full_title} Content: {text}"
-                n_tokens = len(self.TT.encode(full_text)) + (sum(
-                    estimate_image_tokens(path)
-                    for m in MEDIA_MARKER.finditer(text)
-                    for path in get_image_paths(ctx.media_folder, m.group(1))
-                ) if ctx.media_folder else 0)
-                chunks.append(Chunk(n_tokens=n_tokens, section=full_title, text=text))
+    caption = fig.find("caption")
+    caption_text = _element_text(caption).strip()
 
-        return chunks
+    label = fig.find("label")
+    label_text = _element_text(label).strip()
 
-    def _parse_element_citation(self, ref_id: str, ec: ET.Element) -> Reference:
-        authors = [
-            f"{n.findtext('surname', '')}, {n.findtext('given-names', '')}".strip(", ")
-            for n in ec.findall("person-group/name")
-        ]
-        pages = ""
-        fpage, lpage = ec.findtext("fpage", ""), ec.findtext("lpage", "")
-        if fpage:
-            pages = f"{fpage}–{lpage}" if lpage else fpage
-        pub_ids = {p.get("pub-id-type", ""): (p.text or "").strip() for p in ec.findall("pub-id")}
-        year_text = ec.findtext("year", "")
-        return Reference(
-            ref_id=ref_id,
-            authors=authors,
-            title=re.sub(r'\s+', ' ', ec.findtext("article-title", "")).strip(),
-            pub_type=ec.get("publication-type", ""),
-            journal=ec.findtext("source", ""),
-            year=int(year_text) if year_text and year_text.isdigit() else None,
-            volume=ec.findtext("volume", ""),
-            pages=pages,
-            doi=pub_ids.get("doi", ""),
-            pmid=pub_ids.get("pmid", ""),
-            pmcid=pub_ids.get("pmcid", ""),
-        )
+    graphic_el = fig.find(".//graphic")
+    if graphic_el is not None:
+        href = graphic_el.get(_XLINK, "")
+        if not href:
+            raise MissingContentError(f"No xlink:href on graphic in {fig.tag}")
+        img_name = Path(href).name
+        return MediaSpan(media_id=fig_id, label=label_text, caption=caption_text, name=img_name)
 
-    def _parse_mixed_citation(self, ref_id: str, mc: ET.Element) -> Reference:
-        authors = []
-        for n in mc.findall(".//name"):
-            surname = n.findtext("surname", "")
-            given = n.findtext("given-names", "")
-            if surname:
-                authors.append(f"{surname}, {given}".strip(", "))
-        for n in mc.findall(".//string-name"):
-            surname = n.findtext("surname", "")
-            given = n.findtext("given-names", "")
-            if surname:
-                authors.append(f"{surname}, {given}".strip(", "))
-        for c in mc.findall(".//collab"):
-            text = "".join(c.itertext()).strip()
-            if text:
-                authors.append(text)
+    logger.warning("No graphic tag found in fig")
+    return MediaSpan(media_id=fig_id, label=label_text, caption=caption_text, name=None)
 
-        def elem_text(tag: str) -> str:
-            e = mc.find(f".//{tag}")
-            return "".join(e.itertext()).strip() if e is not None else ""
+def _parse_table_wrap(wrap: ET.Element) -> list[MediaSpan | TableSpan]:
+    table_id = wrap.get("id", "")
 
-        title = re.sub(r'\s+', ' ', elem_text("article-title") or elem_text("source") or "").strip()
-        journal = elem_text("source") if mc.find(".//article-title") is not None else ""
+    caption = wrap.find("caption")
+    caption_text = _element_text(caption).strip()
 
-        pages = ""
-        fpage, lpage = mc.findtext("fpage", ""), mc.findtext("lpage", "")
-        if fpage:
-            pages = f"{fpage}–{lpage}" if lpage else fpage
-        pub_ids = {p.get("pub-id-type", ""): (p.text or "").strip() for p in mc.findall(".//pub-id")}
-        year_text = mc.findtext(".//year", "")
-        raw_text = " ".join("".join(mc.itertext()).split())
-        return Reference(
-            ref_id=ref_id,
-            authors=authors,
-            title=title,
-            pub_type=mc.get("publication-type", ""),
-            journal=journal,
-            year=int(year_text) if year_text and year_text.isdigit() else None,
-            volume=mc.findtext(".//volume", ""),
-            pages=pages,
-            doi=pub_ids.get("doi", ""),
-            pmid=pub_ids.get("pmid", ""),
-            pmcid=pub_ids.get("pmcid", ""),
-            raw_text=raw_text,
-        )
+    label = wrap.find("label")
+    label_text = _element_text(label).strip()
 
-    def _table_to_markdown(self, table_wrap: ET.Element, media_folder: Path | None = None) -> str:
-        label = (table_wrap.findtext("label") or "").strip()
-        caption_parts = []
-        caption = table_wrap.find("caption")
-        if caption is not None:
-            for p in caption.iter():
-                if p.text and p.text.strip():
-                    caption_parts.append(p.text.strip())
-        header = f"{label}: {' '.join(caption_parts)}".strip(": ")
+    # check if graphic
+    media_spans = []
+    graphics = wrap.findall("graphic")
+    for graphic in graphics:
+        href = graphic.get(_XLINK, "")
+        if not href: raise MissingContentError(f"No xlink:href on graphic")
+        img_name = Path(href).name
+        media_spans.append(MediaSpan(media_id=table_id, label=label_text, caption=caption_text, name=img_name))
+    if media_spans: return media_spans
 
-        table = table_wrap.find(".//table")
-        if table is None:
-            return header
+    # check if xml table
+    table = wrap.find("table")
+    if table is not None:
+        md = _table_to_markdown(table)
+        if md:
+            return [TableSpan(markdown=md, label=label_text, caption=caption_text, table_id=table_id)]
 
-        def row_to_cells(tr: ET.Element) -> list[str]:
-            return [
-                " ".join(self._get_all_text_with_media(cell, media_folder).split())
-                for cell in tr
-                if cell.tag in ("th", "td")
-            ]
+    logger.warning("No graphic or table found in table-wrap")
+    return [TableSpan(caption=caption_text, label=label_text, table_id=table_id, markdown=None)]
 
-        rows: list[list[str]] = []
-        thead = table.find("thead")
-        if thead is not None:
-            for tr in thead.findall("tr"):
-                rows.append(row_to_cells(tr))
-        tbody = table.find("tbody")
-        if tbody is not None:
-            for tr in tbody.findall("tr"):
-                rows.append(row_to_cells(tr))
+def _table_to_markdown(table: ET.Element) -> str:
+    rows: list[list[str]] = []
 
-        if not rows:
-            return header
+    for tr in table.findall(".//tr"):
+        cells = []
+        for cell in tr:
+            if cell.tag in ("th", "td"):
+                cells.append(_element_text(cell).replace("\n", " ").strip())
+        if cells:
+            rows.append(cells)
 
-        # normalize row widths
-        n_cols = max(len(r) for r in rows)
-        rows = [r + [""] * (n_cols - len(r)) for r in rows]
+    if not rows:
+        return ""
 
-        col_widths = [max(len(rows[i][j]) for i in range(len(rows))) for j in range(n_cols)]
-        col_widths = [max(w, 1) for w in col_widths]
+    width = max(len(r) for r in rows)
+    rows = [r + [""] * (width - len(r)) for r in rows]
 
-        def fmt_row(cells: list[str]) -> str:
-            return "| " + " | ".join(c.ljust(col_widths[j]) for j, c in enumerate(cells)) + " |"
+    col_widths = [max(len(rows[i][j]) for i in range(len(rows))) for j in range(width)]
 
-        separator = "| " + " | ".join("-" * w for w in col_widths) + " |"
+    def fmt_row(cells: list[str]) -> str:
+        return "| " + " | ".join(c.ljust(col_widths[j]) for j, c in enumerate(cells)) + " |"
 
-        lines = [fmt_row(rows[0]), separator] + [fmt_row(r) for r in rows[1:]]
-        table_md = "\n".join(lines)
-        return f"{header}\n{table_md}" if header else table_md
+    lines = [fmt_row(rows[0])]
+    lines.append("| " + " | ".join("-" * w for w in col_widths) + " |")
+    for row in rows[1:]:
+        lines.append(fmt_row(row))
 
-    def _get_all_text_with_media(self, e: ET.Element, media_folder: Path) -> str:
-        '''
-        gets all the text inside an element, formatting graphics as
-        <_MEDIA_L>PATH_TO_GRAPHIC<_MEDIA_R> inline.
-        '''
-        if e is None:
-            return ""
-        parts: list[str] = []
-        if e.text:
-            parts.append(e.text)
-        for child in e:
-            if child.tag in _MEDIA_TAGS and _XLINK in child.attrib:
-                # add inline marker for media files
-                img_name = Path(child.attrib[_XLINK]).name
-                if media_folder and Path(img_name).suffix in COHERE_COMPATIBLE_FORMATS.union(COHERE_TRANSFORMABLE_FORMATS):
-                    # to create marker, media folder must be provided and file must be compatible with cohere (either as-is or converted)
-                    parts.append(f"{_MEDIA_L}{img_name}{_MEDIA_R}")
-            elif child.tag == _TABLE_TAG:
-                # convert table to markdown
-                parts.append(self._table_to_markdown(child, media_folder))
-            else:
-                parts.append(self._get_all_text_with_media(child, media_folder))
-            if child.tail:
-                parts.append(child.tail)
+    return "\n".join(lines)
 
-        return "".join(parts)
+def _parse_list(list_el: ET.Element) -> ListSpan:
+    items: list[ContentItem]= []
+    for item in list_el.findall("list-item"):
+        for p in item.findall("p"):
+            sub_items = _parse_paragraph_element(p)
+            items.extend(sub_items)
+    return ListSpan(list_items=items)
+
+## back matter ##
+
+def _parse_back(back: ET.Element | None) -> PaperBack:
+    if back is None:
+        raise MissingContentError("No back tag found")
+
+    references = _parse_references(back)
+
+    return PaperBack(references=references)
+
+def _parse_references(back: ET.Element) -> list[Reference]:
+    refs = []
+    for ref in back.findall(".//ref"):
+        refs.append(_parse_reference(ref))
+    return refs
+
+def _parse_reference(ref: ET.Element) -> Reference:
+    ref_id = ref.get("id", "")
+    citation = ref.find("element-citation")
+    if citation is None:
+        citation = ref.find("mixed-citation")
+
+    if citation is None:
+        return Reference(ref_id=ref_id, raw_text=_element_text(ref))
+
+    pub_type = citation.get("publication-type", "")
+    doi = ""
+    pmid = ""
+    pmcid = ""
+    for pub_id in citation.findall("pub-id"):
+        id_type = pub_id.get("pub-id-type", "")
+        val = pub_id.text or ""
+        if id_type == "doi":
+            doi = val.strip()
+        elif id_type == "pmid":
+            pmid = val.strip()
+        elif id_type == "pmcid":
+            pmcid = val.strip()
+
+    title_el = citation.find("article-title")
+    if title_el is None:
+        title_el = citation.find("chapter-title")
+    title = _element_text(title_el) if title_el is not None else ""
+
+    authors = []
+    search_group = citation.findall(".//string-name") or citation.findall(".//name")
+    for name in search_group:
+        surname = name.findtext("surname", "")
+        given = name.findtext("given-names", "")
+        if surname and given:
+            authors.append(f"{surname}, {given}".strip())
+        else:
+            logger.warning("Could not find surname and given name for author.")
+
+    return Reference(
+        ref_id=ref_id,
+        authors=authors,
+        title=title,
+        pub_type=pub_type,
+        doi=doi,
+        pmid=pmid,
+        pmcid=pmcid,
+    )
+
+## helpers ##
+
+def _element_text(el: ET.Element | None) -> str:
+    '''
+    recursively collects all text in an element ignoring tags
+    '''
+    if el is None:
+        return ""
+    parts = []
+    if el.text:
+        parts.append(el.text)
+    for child in el:
+        parts.append(_element_text(child))
+        if child.tail:
+            parts.append(child.tail)
+    return " ".join(" ".join(parts).split())
