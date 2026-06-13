@@ -12,7 +12,7 @@ class FetchedPaper:
     main_file: tuple[str, bytes]
     media_files: dict[str, bytes] | None = None
 
-def download_paper(self, paper: FetchedPaper, out_dir: Path, wrap_main_file: bool = False) -> None:
+def download_paper(paper: FetchedPaper, out_dir: Path, wrap_main_file: bool = False) -> str:
     # download main paper file
     paper_root = out_dir / "paper" if wrap_main_file else out_dir
     main_filename, main_bytes = paper.main_file
@@ -40,3 +40,5 @@ def download_paper(self, paper: FetchedPaper, out_dir: Path, wrap_main_file: boo
                     outpath.write_bytes(content)
 
         logger.info(f"Downloaded media files for {paper.identifier} to {media_dir}")
+    
+    return paper_path

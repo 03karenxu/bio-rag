@@ -15,7 +15,7 @@ def init_logging(log_file: str | None = None):
     root.handlers.clear()
     root.addHandler(handler)
     
-    for name in ("__main__", "utils.embeddings", "utils.paper_parser", "utils.image_processing"):
+    for name in ("__main__", "utils.embeddings", "utils.xml_parsing"):
         logging.getLogger(name).setLevel(logging.INFO)
     
     # logging.getLogger("__main__").setLevel(logging.DEBUG)

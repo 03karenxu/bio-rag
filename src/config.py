@@ -5,13 +5,15 @@ _NOVA_PRO = "bedrock/us.amazon.nova-pro-v1:0"
 _TITAN = "bedrock/amazon.titan-embed-text-v2:0"
 _COHERE = "cohere-bedrock/embed-v4" # custom litellm adapter for cohere
 _OPUS = "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
-_QWEN = "ollama/qwen2.5"
+_QWEN = "ollama/qwen2.5:3b"
+_GEMMA = "ollama/gemma3:1b"
+_HAIKU = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # models
 # EMBED_MODEL = _COHERE
 EMBED_MODEL = None
-CLAIM_EXTRACTION_MODEL = _QWEN
-ANSWER_MODEL = _QWEN
+CLAIM_EXTRACTION_MODEL = _HAIKU
+ANSWER_MODEL = _HAIKU
 
 # paths
 ROOT = Path(__file__).parent.parent

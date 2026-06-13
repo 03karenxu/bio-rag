@@ -71,12 +71,12 @@ class RAG:
 
         return context
     
-    async def query(self, query: str, context: str) -> str | None:
+    async def query(self, query: str) -> str | None:
         '''
         augments the query using retrieved context from the knowledge base
         and generates a response
         '''
-        context = self._retrieve(query)
+        context = await self.retrieve(query)
         if context:
             result = answer(query=query, retrieved_context=context)
             if result.has_answer:

@@ -16,7 +16,8 @@ datasets/
 preprocess_cache/
 backup/
 logs/
-notebooks/
+_notebooks/
+_archive/
 figures/
 
 *.png

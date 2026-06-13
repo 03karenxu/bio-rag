@@ -6,7 +6,6 @@ from pathlib import Path
 from tqdm.asyncio import tqdm_asyncio
 from utils.logging import init_logging
 from preprocess.core import process_paper
-from preprocess.xml_parsing import PaperParser
 from config import MAX_CONCURRENT_EMBED, MAX_CONCURRENT_PROCESS, DATASET_DIR, CACHE_DIR
 
 logger = logging.getLogger(__name__)
@@ -17,7 +16,6 @@ async def process_dataset(dataset: Path, out_dir: Path) -> None:
     '''
     process_sem = asyncio.Semaphore(MAX_CONCURRENT_PROCESS)
     embed_sem = asyncio.Semaphore(MAX_CONCURRENT_EMBED)
-    parser = PaperParser()
 
     items = []
     for parent_dir in dataset.iterdir():
@@ -25,16 +23,17 @@ async def process_dataset(dataset: Path, out_dir: Path) -> None:
             logger.warning(f"Skipping {parent_dir}, not a dir")
             continue
 
-        xml_path = next((parent_dir / "paper").glob("*.xml"), None)
-        if not xml_path:
-            logger.warning(f"No XML file found in {parent_dir}, skipping")
+        xml_paths: list[Path] = parent_dir.rglob("*.xml")
+        if not xml_paths:
+            logger.warning(f"No XML files found in {parent_dir}, skipping")
             continue
         
-        out_path: Path = out_dir / f"{xml_path.stem}.json"
-        media_folder: Path | None = parent_dir / "media" if (parent_dir / "media").exists() else None
-        items.append((xml_path, out_path, media_folder))
+        for xml_path in xml_paths:
+            out_path: Path = out_dir / f"{xml_path.stem}.json"
+            media_folder: Path | None = parent_dir / "media" if (parent_dir / "media").exists() else None
+            items.append((xml_path, out_path, media_folder))
 
-    tasks = [process_paper(xml, out_path, media_folder, parser, embed_sem, process_sem) for xml, out_path, media_folder in items]
+    tasks = [process_paper(xml, out_path, embed_sem, process_sem, media_folder) for xml, out_path, media_folder in items]
     failed = []
     for task in tqdm_asyncio.as_completed(tasks, total=len(items)):
         try:
@@ -50,11 +49,11 @@ async def process_dataset(dataset: Path, out_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    init_logging("preprocess_biorxiv.log")
+    init_logging("preprocess_litrev.log")
 
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--in-dir", type=Path, default=f"papers_test", help="The name of the folder to process")
-    arg_parser.add_argument("--out-dir", type=Path, default=f"papers_test", help="The name of output folder (within preprocess_cache)")
+    arg_parser.add_argument("--in-dir", type=Path, default=f"lit_reviews_test", help="The name of the folder to process")
+    arg_parser.add_argument("--out-dir", type=Path, default=f"lit_reviews_test", help="The name of output folder (within preprocess_cache)")
     arg_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
     args = arg_parser.parse_args()
 
