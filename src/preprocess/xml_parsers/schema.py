@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from enum import StrEnum
+
+class MissingContentError(Exception):
+    def __init__(self, element: str, e: ET.Element):
+        super().__init__(f"Missing required element: {element}")
 
 class RefType(StrEnum):
     BIBR = "bibr"

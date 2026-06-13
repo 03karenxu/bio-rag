@@ -17,10 +17,6 @@ logger = logging.getLogger(__name__)
 #  public api
 # ------------------------------------------------------------------------------
 
-class MissingContentError(Exception):
-    def __init__(self, element: str):
-        super().__init__(f"Missing required element: {element}")
-
 def parse_file(path: Path) -> Paper:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -69,12 +65,16 @@ _SENTINEL_RE = re.compile(r"\x00([^\x00\x01]+)\x01([^\x00\x01]+)\x00")
 ## top-level ##
 
 def _parse_article(article: ET.Element) -> Paper:
-    front = _parse_front(article.find(".//ja:head", namespaces=_NAMESPACES))
+    head_el = article.find(".//ja:head", namespaces=_NAMESPACES)
+    if head_el is None: raise MissingContentError(element="head", e=article)
+    front = _parse_front(head_el)
 
     body = article.find(".//ja:body", namespaces=_NAMESPACES)
+    if body is None: raise MissingContentError(element="body", e=article)
     sections, media, tables = _parse_body(body)
 
-    references = _parse_references(article.find(".//ja:tail", namespaces=_NAMESPACES))
+    tail = article.find(".//ja:tail", namespaces=_NAMESPACES)
+    references = _parse_references(tail)
 
     return Paper(
         front=front,
@@ -86,9 +86,7 @@ def _parse_article(article: ET.Element) -> Paper:
 
 ## front ##
 
-def _parse_front(head: ET.Element | None) -> Front:
-    if head is None:
-        raise MissingContentError(element="head")
+def _parse_front(head: ET.Element) -> Front:
 
     # get article title
     title_el    = head.find(".//ce:title", namespaces=_NAMESPACES)
@@ -96,7 +94,7 @@ def _parse_front(head: ET.Element | None) -> Front:
 
     authors     = _parse_authors(head)
     pub_date    = _parse_date(head)
-    abstract    =   _parse_abstract(head)
+    abstract    = _parse_abstract(head)
     return Front(
         title=title,
         authors=authors,
@@ -135,10 +133,11 @@ def _parse_date(head: ET.Element) -> date | None:
         logger.warning(f"Bad date: {year}-{month}-{day}")
         return
 
-def _parse_abstract(head: ET.Element) -> Section:
+def _parse_abstract(head: ET.Element) -> Section | None:
     abstract_el = head.find(".//ce:abstract", namespaces=_NAMESPACES)
     if abstract_el is None:
-        raise MissingContentError("abstract")
+        logger.warning("Could not find abstract")
+        return
 
     sections: list[Section] = []
     for sec in abstract_el.findall(".//ce:abstract-sec", namespaces=_NAMESPACES):
@@ -195,9 +194,6 @@ def _parse_abstract(head: ET.Element) -> Section:
 ## body ##
 
 def _parse_body(body: ET.Element | None) -> tuple[list[Section], list[Media], list[InlineTable]]:
-    if body is None:
-        raise MissingContentError(element="body")
-
     sections: list[Section] = []
     media: list[Media] = []
     tables: list[InlineTable] = []
@@ -239,7 +235,9 @@ def _parse_reference(ref: ET.Element) -> Reference:
 
     citation = ref.find(".//sb:reference", namespaces=_NAMESPACES)
     if citation is None:
-        raise MissingContentError(element="reference")
+        logger.warning(f"Skipping ref, could not find citation")
+        return
+    
     title_el = citation.find(".//sb:maintitle", namespaces=_NAMESPACES)
     title = _element_text(title_el)
 

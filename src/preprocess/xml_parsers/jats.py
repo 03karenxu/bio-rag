@@ -17,10 +17,6 @@ logger = logging.getLogger(__name__)
 #  public api
 # ------------------------------------------------------------------------------
 
-class MissingContentError(Exception):
-    def __init__(self, element: str):
-        super().__init__(f"Missing required element: {element}")
-
 def parse_file(path: Path) -> Paper:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -49,29 +45,28 @@ _tokenizer = PunktSentenceTokenizer(_punkt_params)
 ## top-level ##
 
 def _parse_article(article: ET.Element) -> Paper:
-    front = _parse_front(article.find("front"))
+    front_el = article.find("front")
+    if front_el is None: raise MissingContentError(element="front", e=article)
 
     body = article.find("body")
+    if body is None:raise MissingContentError(element="body", e=article)
     sections, media, tables = _parse_body(body)
 
-    references = _parse_references(article.find("back"))
-
+    back = article.find("back")
+    
     return Paper(
-        front=front,
+        front=_parse_front(front_el),
         body=sections,
         media=media,
         inline_tables=tables,
-        references=references,
+        references=_parse_references(back),
     )
 
 ## front ##
 
 def _parse_front(front: ET.Element | None) -> Front:
-    if front is None:
-        raise MissingContentError(element="front")
     meta = front.find("article-meta")
-    if meta is None:
-        raise MissingContentError(element="meta")
+    if meta is None: raise MissingContentError(element="meta", e=front)
 
     # get article title
     title_el    = meta.find(".//article-title")
@@ -133,7 +128,8 @@ def _parse_date(meta: ET.Element) -> date | None:
 def _parse_abstract(meta: ET.Element) -> Section | None:
     abstract_el = meta.find("abstract")
     if abstract_el is None:
-        raise MissingContentError(element="abstract")
+        logger.warning("No abstract element found")
+        return
     
     sec, _, _ = _parse_section(sec=abstract_el)
     return sec
@@ -141,8 +137,6 @@ def _parse_abstract(meta: ET.Element) -> Section | None:
 ## body ##
 
 def _parse_body(body: ET.Element | None) -> tuple[list[Section], list[Media], list[InlineTable]]:
-    if body is None:
-        raise MissingContentError(element="body")
 
     sections: list[Section] = []
     media: list[Media] = []
@@ -245,15 +239,14 @@ def _parse_references(back: ET.Element | None) -> list[Reference]:
 
     return out
 
-def _parse_reference(ref: ET.Element) -> Reference:
+def _parse_reference(ref: ET.Element) -> Reference | None:
     ref_id = ref.get("id", "")
 
-    citation = ref.find("element-citation")
+    citation = ref.find(".//element-citation")
+    if citation is None: citation = ref.find(".//mixed-citation")
     if citation is None:
-        citation = ref.find("mixed-citation")
-
-    if citation is None:
-        raise MissingContentError(element="citation")
+        logger.warning(f"Skipping ref, could not find citation")
+        return
 
     title_el = citation.find("article-title")
     if title_el is None:
@@ -365,7 +358,7 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
         while i < len(children):
             child = children[i]
             if child.tag == "xref" and (child.get("ref-type", "") in {"bibr", "fig", "table"}):
-                parts.append(child.text)
+                if child.text: parts.append(child.text)
                 ref_type = child.get("ref-type", "")
                 rid = child.get("rid", "")
                 
@@ -410,6 +403,7 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
         
         # remove sentinels from sentence
         clean_text = _SENTINEL_RE.sub("", sentence)
+        if not clean_text: continue
 
         out.append(Sentence(id=hash(clean_text), text=clean_text, refs=refs))
 
