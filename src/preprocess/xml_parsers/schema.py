@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
 from enum import StrEnum
+import uuid
+from pydantic import BaseModel, Field
 
 class MissingContentError(Exception):
     def __init__(self, element: str, e: ET.Element):
@@ -20,57 +21,42 @@ class PubType(StrEnum):
     PATENT = "patent"
     OTHER = "other"
 
-@dataclass
-class InlineRef:
+class InlineRef(BaseModel):
     type: RefType
     target: str
 
-@dataclass
-class Sentence:
-    id: str
+class Sentence(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     text: str
-    refs: list[InlineRef] = field(default_factory=list)
+    refs: list[InlineRef] = Field(default_factory=list)
 
     def flat_text(self) -> str:
         return self.text
+    
+    def sentences(self) -> list[Sentence]:
+        return [self]
 
-@dataclass
-class List:
-    items: list[list[Sentence]]
+class Paragraph(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    sentences: list[Sentence]
+
+    def sentences(self) -> list[Sentence]:
+        return [s for item in self.items for s in item.sentences()]
+    
     def flat_text(self) -> str:
-        bullets = []
-        for bullet in self.items:
-            flat_bullet = " ".join([s.flat_text() for s in bullet])
-            bullets.append(f"- {flat_bullet}")
-        return "\n".join(bullets)
-
-    def to_markdown(self, *args) -> str:
-        bullets = []
-        for bullet in self.items:
-            flat_bullet = " ".join([s.flat_text() for s in bullet])
-            bullets.append(f"* {flat_bullet}")
-        return "\n".join(bullets)
-
-@dataclass
-class Paragraph:
-    id: str
-    sentences: list[Sentence | List]
-
-    def flat_text(self) -> str:
-        body = " ".join(s.flat_text() for s in self.sentences)
+        body = " ".join(s.flat_text() for s in self.sentences())
         return body
 
     def to_markdown(self, *args) -> str:
-        body = " ".join(s.text for s in self.sentences)
+        body = " ".join(s.flat_text() for s in self.sentences())
         return body
 
-@dataclass
-class Section:
-    id: str
+class Section(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     header: str
-    content: list["Paragraph | Section | List"]
+    content: list[Paragraph | Section]
 
-    def flat_text(self) -> str:
+    def flat_text(self, with_headers: bool = False) -> str:
         parts = []
         if self.header:
             parts.append(self.header)
@@ -85,12 +71,17 @@ class Section:
             parts.append(f"### {self.header}")
         parts.extend(p.to_markdown(True) for p in self.content)
         return "\n\n".join(parts)
+    
+    def sentences(self) -> list[Sentence]:
+        return [s for item in self.content for s in item.sentences()]
 
-@dataclass
-class InlineTable:
-    headers: list = field(default_factory=list)
-    rows: list[list[str]] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
+class InlineTable(BaseModel):
+    id: str
+    label: str
+    caption: str
+    headers: list[str] = Field(default_factory=list)
+    rows: list[list[str]] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
 
     def flat_text(self) -> str:
         return "\n".join([" | ".join(r) for r in self.rows])
@@ -107,8 +98,7 @@ class InlineTable:
 
         return "\n".join(lines)
 
-@dataclass
-class Media:
+class Media(BaseModel):
     id: str
     label: str
     caption: str
@@ -120,8 +110,7 @@ class Media:
     def markdown(self) -> str:
         return f"**{self.label}**\n\n{self.caption}"
 
-@dataclass
-class Reference:
+class Reference(BaseModel):
     id: str
     title: str
     authors: str | list[str]
@@ -143,16 +132,19 @@ class Reference:
         year = self.year if self.year is not None else "n.d."
         return f"- {authors} ({year}). *{self.title}*. {self.source}."
 
-@dataclass
-class Front:
+class Front(BaseModel):
     title: str
     authors: list[str]
     hash: str
     publication_date: str
-    abstract: Section
+    abstract: Section | None = None
 
     def flat_text(self) -> str:
-        return f"TITLE: {self.title}\n" + f"AUTHORS: {", ".join(self.authors)}\n" + f"DATE: {self.publication_date}"
+        return (
+            f"TITLE: {self.title}\n"
+            + f"AUTHORS: {', '.join(self.authors)}\n"
+            + f"DATE: {self.publication_date}"
+        )
 
     def to_markdown(self) -> str:
         authors = ", ".join(self.authors)
@@ -165,8 +157,7 @@ class Front:
         ]
         return "\n\n".join(parts)
 
-@dataclass
-class Paper:
+class Paper(BaseModel):
     front: Front
     body: list[Section]
     media: list[Media]
@@ -196,3 +187,6 @@ class Paper:
             parts.extend(r.to_markdown() for r in self.references)
 
         return "\n\n".join(parts)
+    
+    def sentences(self) -> list[Sentence]:
+        return [s for section in self.body for s in section.sentences()]

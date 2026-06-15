@@ -1,17 +1,60 @@
 from __future__ import annotations
 
 import re
+import spacy
+import string
 import hashlib
 import logging
 from pathlib import Path
 from datetime import date
 import xml.etree.ElementTree as ET
-from nltk.tokenize import PunktSentenceTokenizer
-from nltk.tokenize.punkt import PunktParameters
+from spacy.language import Language
 
 from preprocess.xml_parsers.schema import *
 
 logger = logging.getLogger(__name__)
+
+@Language.component("prevent_citation_splits")
+def prevent_citation_splits(doc):
+    for i, token in enumerate(doc[:-1]):
+        if token.text in [";", ":"]:
+            j = 1
+            while i + j < len(doc) and doc[i + j].is_space:
+                j += 1
+            if i + j < len(doc):
+                doc[i + j].is_sent_start = False
+
+        if token.text == "." and i > 0 and doc[i - 1].text.lower() in ("al", "fig"):
+            j = 1
+            while i + j < len(doc) and doc[i + j].is_space:
+                j += 1
+            if i + j < len(doc):
+                doc[i + j].is_sent_start = False
+
+        if token.is_digit and (i + 1) < len(doc) and doc[i + 1].text == ")":
+            token.is_sent_start = False
+
+    return doc
+
+nlp = spacy.load("en_core_web_sm", disable=["parser"])
+nlp.add_pipe("prevent_citation_splits", first=True)
+nlp.add_pipe("sentencizer")
+
+_TITLE_TAGS = {"label", "section-title"}
+
+_NAMESPACES = {
+    "xocs": "http://www.elsevier.com/xml/xocs/dtd",
+    "xoe": "http://www.elsevier.com/xml/xoe/dtd",
+    "ce": "http://www.elsevier.com/xml/common/dtd",
+    "sb": "http://www.elsevier.com/xml/common/struct-bib/dtd",
+    "xlink": "http://www.w3.org/1999/xlink",
+    "prism": "http://prismstandard.org/namespaces/basic/2.0/",
+    "ja": "http://www.elsevier.com/xml/ja/dtd",
+}
+
+_SENTENCE_PUNCT = frozenset(".!?")
+_SENTINEL = "\x00{}\x01{}\x00"
+_SENTINEL_RE = re.compile(r"\x00([^\x00\x01]+)\x01([^\x00\x01]+)\x00")
 
 # ------------------------------------------------------------------------------
 #  public api
@@ -29,38 +72,6 @@ def parse_string(xml_text: str) -> Paper:
     return _parse_article(el)
 
 # ------------------------------------------------------------------------------
-
-## private globals ##
-
-_TITLE_TAGS = {"label", "section-title"}
-
-_punkt_params = PunktParameters()
-_punkt_params.abbrev_types = {
-    "fig", "figs", "et al", "e.g", "i.e", "vs", "c.a", "approx", "dept", "e", "no"
-}
-_tokenizer = PunktSentenceTokenizer(_punkt_params)
-
-_NAMESPACES = {
-    # Elsevier delivery / wrapper layer
-    "xocs": "http://www.elsevier.com/xml/xocs/dtd",
-    "xoe": "http://www.elsevier.com/xml/xoe/dtd",
-
-    # Core Elsevier article structure (most important)
-    "ce": "http://www.elsevier.com/xml/common/dtd",
-    "sb": "http://www.elsevier.com/xml/common/struct-bib/dtd",
-
-    # Linking (figures, graphics, URLs)
-    "xlink": "http://www.w3.org/1999/xlink",
-
-    # Metadata / publishing standards
-    "prism": "http://prismstandard.org/namespaces/basic/2.0/",
-
-    # Article content layer (JA / full-text article)
-    "ja": "http://www.elsevier.com/xml/ja/dtd",
-}
-
-_SENTINEL = "\x00{}\x01{}\x00"
-_SENTINEL_RE = re.compile(r"\x00([^\x00\x01]+)\x01([^\x00\x01]+)\x00")
 
 ## top-level ##
 
@@ -146,17 +157,12 @@ def _parse_abstract(head: ET.Element) -> Section | None:
         for para in sec.findall(".//ce:simple-para", namespaces=_NAMESPACES):
             sentences = _extract_sentences(para)
             if not sentences: continue
-            para_id = para.get("id") or _stable_id("".join(s.text for s in sentences))
             paragraphs.append(
-                Paragraph(
-                    id=para_id,
-                    sentences=sentences,
-                )
+                Paragraph(sentences=sentences)
             )
         if paragraphs:
             sections.append(
                 Section(
-                    id=_stable_id(section_title + sec.get("id", "")),
                     header=section_title,
                     content=paragraphs,
                 )
@@ -169,13 +175,9 @@ def _parse_abstract(head: ET.Element) -> Section | None:
             sentences = _extract_sentences(para)
             if sentences:
                 paragraphs.append(
-                    Paragraph(
-                        id=para.get("id") or _stable_id("".join(s.text for s in sentences)),
-                        sentences=sentences,
-                    )
+                    Paragraph(sentences=sentences)
                 )
         return Section(
-            id=_stable_id("abstract"),
             header="Abstract",
             content=paragraphs,
         )
@@ -186,7 +188,6 @@ def _parse_abstract(head: ET.Element) -> Section | None:
         return s
     
     return Section(
-        id=_stable_id("abstract"),
         header="Abstract",
         content=sections,
     )
@@ -224,7 +225,8 @@ def _parse_references(tail: ET.Element | None) -> list[Reference]:
     out: list[Reference] = []
     for ref in tail.findall(".//ce:bib-reference", namespaces=_NAMESPACES):
         try:
-            out.append(_parse_reference(ref))
+            r = _parse_reference(ref)
+            if r: out.append(r)
         except ValueError as e:
             logger.warning(f"Bad reference: {e}")
 
@@ -270,9 +272,8 @@ def _parse_reference(ref: ET.Element) -> Reference:
 def _parse_section(sec: ET.Element) -> Section:
     title_el = sec.find("ce:section-title", namespaces=_NAMESPACES)
     header = _element_text(title_el)
-    section_id = sec.get("id", _stable_id(header))
 
-    content: list[Paragraph | Section | List] = []
+    content: list[Paragraph | Section] = []
     for child in sec:
         tag = _local(child.tag).strip()
         if tag in _TITLE_TAGS:
@@ -293,7 +294,6 @@ def _parse_section(sec: ET.Element) -> Section:
     if not content: return None
 
     return Section(
-        id=section_id,
         header=header,
         content=content,
     )
@@ -307,6 +307,33 @@ def _get_reftype(rid: str) -> str | None:
         return "fig"
     return
 
+def _handle_refs(parts: list, child: ET.Element, rids: list[str]) -> None:
+    ref_type = next((_get_reftype(rid) for rid in rids if _get_reftype(rid)), None)
+    if not ref_type:
+        if child.tail: parts.append(child.tail)
+        return
+
+    if ref_type == "bibr":
+        last = parts[-1] if parts else ""
+        trailing_punct = None
+        if last and last[-1] in _SENTENCE_PUNCT:
+            trailing_punct = last[-1]
+            last = parts[-1] = last[:-1]
+        child_text = _element_text(child).strip().strip("[]()").strip()
+        if last and last[-1] not in ("(", "["):
+            child_text = f"[{child_text}]"
+        if not last.endswith(" "):
+            child_text = f" {child_text}"
+        for rid in rids:
+            parts.append(_SENTINEL.format(ref_type, rid))
+        parts.append(child_text)
+        if trailing_punct: parts.append(trailing_punct)
+    else:
+        parts.append(_element_text(child).strip())
+        for rid in rids:
+            parts.append(_SENTINEL.format(ref_type, rid))
+    if child.tail: parts.append(child.tail)
+
 def _extract_sentences(p: ET.Element) -> list[Sentence]:
     # collect all text inside p, placing a sentinel for every xref
     parts = []
@@ -317,29 +344,23 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
         for child in e:
             tag = _local(child.tag).strip()
             if tag == "cross-ref":
-                # single cross ref
-                parts.append(_element_text(child))
                 rid = child.get("refid", "")
-                ref_type = _get_reftype(rid)
-                if not ref_type:
+                if not _get_reftype(rid):
                     if child.tail: parts.append(child.tail)
                     continue
+                _handle_refs(parts, child, [rid])
 
-                parts.append(_SENTINEL.format(ref_type, rid))
-                if ref_type == "bibr": parts.append(". ")
-                if child.tail: parts.append(child.tail)
             elif tag == "cross-refs":
-                # multiple refs
-                parts.append(_element_text(child))
-                rids = child.get("refid").split()
-                for rid in rids:
-                    ref_type = _get_reftype(rid)
-                    if not ref_type:    
-                        if child.tail: parts.append(child.tail)
-                        continue
-                    parts.append(_SENTINEL.format(ref_type, rid))
-                if ref_type == "bibr": parts.append(". ")
-                if child.tail: parts.append(child.tail)
+                rids = [rid for rid in child.get("refid", "").split() if _get_reftype(rid)]
+                _handle_refs(parts, child, rids)
+
+            elif tag == "list":
+                items = []
+                for i, list_item in enumerate(child):
+                    text = _element_text(list_item)
+                    if text: items.append(f"{i+1}) {text}")
+                if items: parts.append(" ".join(items))
+
             else:
                 collect(child)
                 if child.tail: parts.append(child.tail)
@@ -349,7 +370,8 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
 
     # split flat_text into sentences
     out = []
-    sentences = _tokenizer.tokenize(flat_text)
+    doc = nlp(flat_text)
+    sentences = [sent.text for sent in doc.sents]
     for sentence in sentences:
         # get InlineRefs
         refs=[]
@@ -361,7 +383,7 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
         # remove sentinels from sentence
         clean_text = _SENTINEL_RE.sub("", sentence)
 
-        out.append(Sentence(id=hash(clean_text), text=clean_text, refs=refs))
+        out.append(Sentence(text=clean_text, refs=refs))
 
     return out
 
@@ -384,18 +406,14 @@ def _local(tag: str) -> str:
         return tag.split(":", 1)[1]
     return tag
 
-def _stable_id(text: str) -> str:
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
-
 if __name__ == "__main__":
     import json
-    from dataclasses import asdict
 
     test_file = "/Users/karenxu/Documents/Code/USRA/datasets/10.1016_j.archoralbio.2010.06.016.xml"
     paper = parse_file(test_file)
 
     with open("test.json", "w") as f:
-        json.dump(asdict(paper), f, ensure_ascii=False)
+        json.dump(paper.model_dump(), f, ensure_ascii=False)
 
     full_text = paper.to_markdown()
     with open("test.md", "w") as f:

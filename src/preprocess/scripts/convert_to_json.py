@@ -5,7 +5,6 @@ from utils.logging import init_logging
 from config import DATASET_DIR
 import argparse
 import json
-from dataclasses import asdict
 from tqdm import tqdm
 import logging
 
@@ -40,7 +39,7 @@ if __name__ == "__main__":
         out_path.parent.mkdir(exist_ok=True, parents=True)
         try:
             with open(out_path, "w") as f:
-                json.dump(asdict(parsed), f)
+                json.dump(parsed.model_dump(), f)
                 logger.info(f"Created file {out_path}")
         except Exception as e:
             logger.warning(f"Failed to save {out_path}: {e}")

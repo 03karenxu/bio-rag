@@ -1,17 +1,42 @@
 from __future__ import annotations
 
 import re
+import spacy
 import hashlib
 import logging
 from pathlib import Path
 from datetime import date
 import xml.etree.ElementTree as ET
-from nltk.tokenize import PunktSentenceTokenizer
-from nltk.tokenize.punkt import PunktParameters
-
 from preprocess.xml_parsers.schema import *
+from spacy.language import Language
 
 logger = logging.getLogger(__name__)
+
+@Language.component("prevent_citation_splits")
+def prevent_citation_splits(doc):
+    for i, token in enumerate(doc[:-1]):
+        if token.text in [";", ":"]:
+            j = 1
+            while i + j < len(doc) and doc[i + j].is_space:
+                j += 1
+            if i + j < len(doc):
+                doc[i + j].is_sent_start = False
+
+        if token.text == "." and i > 0 and doc[i - 1].text.lower() in ("al", "fig"):
+            j = 1
+            while i + j < len(doc) and doc[i + j].is_space:
+                j += 1
+            if i + j < len(doc):
+                doc[i + j].is_sent_start = False
+
+        if token.is_digit and (i + 1) < len(doc) and doc[i + 1].text == ")":
+            token.is_sent_start = False
+
+    return doc
+
+nlp = spacy.load("en_core_web_sm", disable=["parser"])
+nlp.add_pipe("prevent_citation_splits", first=True)
+nlp.add_pipe("sentencizer")
 
 # ------------------------------------------------------------------------------
 #  public api
@@ -35,12 +60,6 @@ def parse_string(xml_text: str) -> Paper:
 _XLINK = "{http://www.w3.org/1999/xlink}href"
 _TITLE_TAGS = {"title", "label"}
 _RANGE_DASHES = {"–", "—", "-", "‐", "‑", "−"}
-
-_punkt_params = PunktParameters()
-_punkt_params.abbrev_types = {
-    "fig", "figs", "et al", "e.g", "i.e", "vs", "c.a", "approx", "dept", "e"
-}
-_tokenizer = PunktSentenceTokenizer(_punkt_params)
 
 ## top-level ##
 
@@ -171,7 +190,7 @@ def _parse_fig(fig: ET.Element) -> Media:
         filename=filename,
     )
 
-def _parse_table_wrap(table: ET.Element):
+def _parse_table_wrap(table: ET.Element) -> tuple[list[Media], list[InlineTable]]:
     table_id = table.get("id", "")
     label = _element_text(table.find("label"))
     caption = _element_text(table.find("caption"))
@@ -186,6 +205,9 @@ def _parse_table_wrap(table: ET.Element):
 
         tables.append(
             InlineTable(
+                id=table_id,
+                label=label,
+                caption=caption,
                 headers=[],
                 rows=rows,
                 metadata={
@@ -233,7 +255,8 @@ def _parse_references(back: ET.Element | None) -> list[Reference]:
 
     for ref in back.findall(".//ref"):
         try:
-            out.append(_parse_reference(ref))
+            r = _parse_reference(ref)
+            if r: out.append(r)
         except ValueError as e:
             logger.warning(f"Bad reference: {e}")
 
@@ -287,9 +310,8 @@ def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTa
 
     title_el = sec.find("title")
     header = _element_text(title_el)
-    section_id = hash(header)
 
-    content: list[Paragraph | Section | List] = []
+    content: list[Paragraph | Section] = []
     media: list[Media] = []
     tables: list[InlineTable] = []
     for child in sec:
@@ -302,13 +324,12 @@ def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTa
             media.extend(m)
             tables.extend(t)
         elif tag == "p":
-            sentences = _extract_sentences(child)
+            sentences, m ,t = _extract_sentences(child)
             if sentences:
-                p = Paragraph(
-                    id="p_" + hashlib.md5("".join(s.text for s in sentences).encode()).hexdigest()[:8],
-                    sentences=sentences
-                )
+                p = Paragraph(sentences=sentences)
                 content.append(p)
+            if m: media.extend(m)
+            if t: tables.extend(t)
         elif tag == "fig":
             m = _parse_fig(child)
             if m: media.append(m)
@@ -317,24 +338,24 @@ def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTa
             if m: media.extend(m)
             if t: tables.extend(t)
         elif tag == "list":
+            # list outside of paragraph element
             list = _parse_list(child)
-            if list: content.append(list)
+            if list: content.append(Paragraph(sentences=[list]))
 
     if not content and not media and not tables:
         return None, [], []
 
     return Section(
-        id=section_id,
         header=header,
         content=content,
     ), media, tables
 
-def _parse_list(list: ET.Element) -> List:
+def _parse_list(list: ET.Element) -> Sentence:
     bullets = []
-    for list_item in list:
-        sentences = _extract_sentences(p=list_item)
-        if sentences: bullets.append(sentences)
-    return List(items=bullets)
+    for i, list_item in enumerate(list):
+        text = _element_text(list_item)
+        if text: bullets.append(f"{i+1}) {text}")
+    return Sentence(text=" ".join(bullets), refs=[])
 
 _SENTINEL = "\x00{}\x01{}\x00"
 _SENTINEL_RE = re.compile(r"\x00([^\x00\x01]+)\x01([^\x00\x01]+)\x00")
@@ -345,10 +366,10 @@ def _expand_rid_range(start_rid: str, end_rid: str) -> list[str]:
     end_n   = int(re.search(r"\d+", end_rid).group())
     return [f"{prefix}{i}" for i in range(start_n, end_n + 1)]
 
-def _extract_sentences(p: ET.Element) -> list[Sentence]:
-
-    # collect all text inside p, placing a sentinel for every xref
+def _extract_sentences(p: ET.Element) -> tuple[list[Sentence], list[Media], list[InlineTable]]:
     parts = []
+    media = []
+    tables = []
     def collect(e: ET.Element) -> None:
         if e is None:
             return
@@ -358,6 +379,7 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
         while i < len(children):
             child = children[i]
             if child.tag == "xref" and (child.get("ref-type", "") in {"bibr", "fig", "table"}):
+                # handle inline refs
                 if child.text: parts.append(child.text)
                 ref_type = child.get("ref-type", "")
                 rid = child.get("rid", "")
@@ -383,6 +405,26 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
                     parts.append(_SENTINEL.format(ref_type, rid))
                     if child.tail: parts.append(child.tail)
                     i += 1
+            elif child.tag == "list":
+                # handle list nested in paragraph element
+                items = []
+                for j, list_item in enumerate(child):
+                    text = _element_text(list_item)
+                    if text: items.append(f"{j+1}) {text}")
+                if items: parts.append(" ".join(items))
+                if child.tail: parts.append(child.tail)
+                i += 1 
+            elif child.tag == "fig":
+                # handle nested figure
+                fig: Media = _parse_fig(child)
+                if fig: media.append(fig)
+                i += 1 
+            elif child.tag == "table-wrap":
+                # handle nested in-line table
+                m, t = _parse_table_wrap(child)
+                if m: media.extend(m)
+                if t: tables.extend(t)
+                i += 1 
             else:
                 collect(child)
                 if child.tail: parts.append(child.tail)
@@ -392,7 +434,8 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
 
     # split flat_text into sentences
     out = []
-    sentences = _tokenizer.tokenize(flat_text)
+    doc = nlp(flat_text)
+    sentences = [sent.text for sent in doc.sents]
     for sentence in sentences:
         # get InlineRefs
         refs=[]
@@ -405,9 +448,9 @@ def _extract_sentences(p: ET.Element) -> list[Sentence]:
         clean_text = _SENTINEL_RE.sub("", sentence)
         if not clean_text: continue
 
-        out.append(Sentence(id=hash(clean_text), text=clean_text, refs=refs))
+        out.append(Sentence(text=clean_text, refs=refs))
 
-    return out
+    return (out, media, tables)
 
 def _element_text(el: ET.Element | None) -> str:
     if el is None:
@@ -423,13 +466,12 @@ def _element_text(el: ET.Element | None) -> str:
 
 if __name__ == "__main__":
     import json
-    from dataclasses import asdict
 
     test_file = "/Users/karenxu/Documents/Code/USRA/datasets/papers/1cc57bae-7c43-1014-843f-f407711b0a12/paper/720970.xml"
     paper = parse_file(test_file)
 
     with open("test.json", "w") as f:
-        json.dump(asdict(paper), f, ensure_ascii=False)
+        json.dump(paper.model_dump(), f, ensure_ascii=False)
 
     full_text = paper.to_markdown()
     with open("test.md", "w") as f:
