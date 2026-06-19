@@ -38,19 +38,17 @@ class Sentence(BaseModel):
 
 class Paragraph(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    sentences: list[Sentence]
+    items: list[Sentence]
 
     def sentences(self) -> list[Sentence]:
-        return [s for item in self.items for s in item.sentences()]
-    
+        return self.items
+
     def flat_text(self) -> str:
-        body = " ".join(s.flat_text() for s in self.sentences())
-        return body
+        return " ".join(s.flat_text() for s in self.sentences())
 
     def to_markdown(self, *args) -> str:
-        body = " ".join(s.flat_text() for s in self.sentences())
-        return body
-
+        return " ".join(s.flat_text() for s in self.sentences())
+    
 class Section(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     header: str

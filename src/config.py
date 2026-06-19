@@ -8,12 +8,16 @@ _OPUS = "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
 _QWEN = "ollama/qwen2.5:3b"
 _GEMMA = "ollama/gemma3:1b"
 _HAIKU = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+_DSFLASH = "deepseek/deepseek-v4-flash"
+_NEMOTRON_EMBED = "openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free"
+_QWEN_EMBED = "qwen/qwen3-embedding-8b"
 
 # models
-# EMBED_MODEL = _COHERE
-EMBED_MODEL = None
-CLAIM_EXTRACTION_MODEL = _HAIKU
-ANSWER_MODEL = _HAIKU
+EMBED_MODEL = _NEMOTRON_EMBED
+CLAIM_MODEL = _DSFLASH
+ANSWER_MODEL = None
+TRIPLE_MODEL = _DSFLASH
+QA_GEN_MODEL = _DSFLASH
 
 # paths
 ROOT = Path(__file__).parent.parent

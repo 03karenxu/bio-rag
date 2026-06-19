@@ -326,7 +326,7 @@ def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTa
         elif tag == "p":
             sentences, m ,t = _extract_sentences(child)
             if sentences:
-                p = Paragraph(sentences=sentences)
+                p = Paragraph(items=sentences)
                 content.append(p)
             if m: media.extend(m)
             if t: tables.extend(t)
@@ -340,7 +340,7 @@ def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTa
         elif tag == "list":
             # list outside of paragraph element
             list = _parse_list(child)
-            if list: content.append(Paragraph(sentences=[list]))
+            if list: content.append(Paragraph(items=[list]))
 
     if not content and not media and not tables:
         return None, [], []

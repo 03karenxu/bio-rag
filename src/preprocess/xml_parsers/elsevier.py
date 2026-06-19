@@ -158,7 +158,7 @@ def _parse_abstract(head: ET.Element) -> Section | None:
             sentences = _extract_sentences(para)
             if not sentences: continue
             paragraphs.append(
-                Paragraph(sentences=sentences)
+                Paragraph(items=sentences)
             )
         if paragraphs:
             sections.append(
@@ -175,7 +175,7 @@ def _parse_abstract(head: ET.Element) -> Section | None:
             sentences = _extract_sentences(para)
             if sentences:
                 paragraphs.append(
-                    Paragraph(sentences=sentences)
+                    Paragraph(items=sentences)
                 )
         return Section(
             header="Abstract",
@@ -283,11 +283,9 @@ def _parse_section(sec: ET.Element) -> Section:
             if sub_sec: content.append(sub_sec)
         elif tag == "para":
             sentences = _extract_sentences(child)
-            id = child.get("id", "p_" + hashlib.md5("".join(s.text for s in sentences).encode()).hexdigest()[:8])
             if sentences:
                 p = Paragraph(
-                    id=id,
-                    sentences=sentences
+                    items=sentences
                 )
                 content.append(p)
 

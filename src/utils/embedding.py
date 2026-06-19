@@ -8,7 +8,14 @@ import litellm
 litellm.suppress_debug_info = True
 from litellm.types.utils import Embedding
 from litellm import aembedding, CustomLLM, EmbeddingResponse, Usage
-from config import EMBED_INIT_DELAY, EMBED_MODEL, MAX_EMBED_ATTEMPTS, EMBED_DIMENSION
+from config import EMBED_INIT_DELAY, EMBED_MODEL, MAX_EMBED_ATTEMPTS, SRC
+from typing import Callable
+from functools import wraps
+import os
+from dotenv import load_dotenv
+
+load_dotenv(SRC / ".env")
+OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 
 logger = logging.getLogger(__name__)
 
@@ -82,36 +89,37 @@ litellm.custom_provider_map = [
     {"provider": "cohere-bedrock", "custom_handler": _adapter}
 ]
 
-async def embed_with_retry(input_: list[str | dict],
-                           output_dim: int = EMBED_DIMENSION) -> list[list[float]]:
-    retry_delay = EMBED_INIT_DELAY
-    for attempt in range(1, MAX_EMBED_ATTEMPTS + 1):
-        try:
-            logger.debug(f"Embedding {len(input_)} items...")
-            resp = await aembedding(model=EMBED_MODEL,
-                                    input=input_,
-                                    output_dimension=output_dim)
-            logger.debug(f"Received {len(input_)} embeddings")
-            embeddings = [item["embedding"] for item in resp.data]
-            return embeddings
-        except Exception as e:
-            err_str = str(e)
+def with_retry(max_attempts: int, init_delay: float):
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            retry_delay = init_delay
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_attempts:
+                        raise
 
-            # don't retry if not rate/throttling error
-            if "Input is too long" in err_str or (
-                "ValidationException" in err_str and "too long" in err_str.lower()
-            ):
-                logger.error(f"Unretryable error for {len(input_)} items (input too long): {e}")
-                with open("bad_input.jsonl", "w") as f:
-                    for record in input_:
-                        print(json.dumps(record), file=f)
-                raise e
-            
-            if attempt == MAX_EMBED_ATTEMPTS:
-                error_message = f"Max retry attempts reached. Skipping {len(input_)} embeddings: {input_}"
-                logger.error(error_message)
-                raise e
-            
-            logger.error(f"Embed attempt {attempt} failed for {len(input_)} items. Retrying in {retry_delay}s")
-            await asyncio.sleep(retry_delay)
-            retry_delay = retry_delay * 2 + random.uniform(0, 1)
+                    logger.error(
+                        f"Attempt {attempt}/{max_attempts} failed: {e}. "
+                        f"Retrying in {retry_delay:.2f}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = retry_delay * 2 + random.uniform(0, 1)
+
+        return wrapper
+    return decorator
+
+
+@with_retry(max_attempts=MAX_EMBED_ATTEMPTS, init_delay=EMBED_INIT_DELAY)
+async def embed(input_: list[str | dict]) -> list[list[float]]:
+    logger.debug(f"Embedding {len(input_)} items...")
+    resp = await aembedding(
+        model=EMBED_MODEL,
+        input=list(input_),
+        api_base="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_KEY,
+    )
+    logger.debug(f"Received {len(input_)} embeddings")
+    return [item["embedding"] for item in resp.data]
