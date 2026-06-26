@@ -10,43 +10,14 @@ from itertools import batched, product
 from sklearn.mixture import GaussianMixture
 
 from config import TRIPLE_MODEL
+from utils.graph import triple_extractor
 from utils.embedding import embed
-from utils.lm import configure_lm
+from utils.lm import openrouter_config
 from grade.schema import Claim, Triple, EntityEquivalence
 
 logger = logging.getLogger(__name__)
 
-configure_lm(model_str=TRIPLE_MODEL)
-
-class _TripleExtractSignature(dspy.Signature):
-    """
-    Extract knowledge graph triples from a list of sentences.
-
-    A triple is a (subject, predicate, object) structure representing a single
-    directional relationship between two entities or concepts.
-
-    Rules:
-    - subjects and objects must be specific named entities rather than pronouns or vague references like "the studies" or "some researchers".
-    - predicate must be a concise, active verb phrase describing the relationship
-      (e.g. "increases risk of", "is a type of", "requires", "is associated with").
-    - Preserve hedging in the predicate when present in the claim:
-      "may increase risk of" not "increases risk of" if the claim says "may".
-    - One sentence may yield many distinct triples.
-    - Do not infer relationships not explicitly stated in the sentence.
-    - subject and object must be copied as they appear in the claim text — do not normalize or expand.
-    """
-
-    sentences: list[str] = dspy.InputField(
-        desc="A list of sentences to extract triples from."
-    )
-    triples: list[list[tuple[str, str, str]]] = dspy.OutputField(
-        desc=(
-            "For each sentence, a matching list of (subject, predicate, object) tuples. "
-            "The outer list must have exactly the same length as the input list, "
-            "with each inner list containing the triples extracted from the corresponding sentence. "
-            "If a sentence yields no triples, return an empty inner list for that position."
-        )
-    )
+openrouter_config(model_str=TRIPLE_MODEL)
 
 class _EntityEquivalenceSignature(dspy.Signature):
     """
@@ -97,8 +68,7 @@ class _EntityEquivalenceSignature(dspy.Signature):
         )
     )
 
-triple_extractor        = dspy.Predict(_TripleExtractSignature)
-equivalence_detector    = dspy.Predict(_EntityEquivalenceSignature)
+equivalence_detector = dspy.Predict(_EntityEquivalenceSignature)
 
 async def get_triples(claims: list[Claim], cache_path: Path | None = None, batch_size: int = 20) -> list[Triple]:
     if cache_path.exists():

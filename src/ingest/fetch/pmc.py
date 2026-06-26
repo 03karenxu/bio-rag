@@ -3,8 +3,8 @@ import logging
 import requests
 from typing import Iterator
 import xml.etree.ElementTree as ET
-from download.core import FetchedPaper
-from download.rate_limiter import RateLimiter
+from ingest.schema import FetchedPaper
+from ingest.fetch.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 _pmc_limiter = RateLimiter(rate=3, period=1.5)

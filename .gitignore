@@ -19,7 +19,7 @@ logs/
 _notebooks/
 _archive/
 figures/
-
+lib/ 
 *.png
 
 .DS_Store

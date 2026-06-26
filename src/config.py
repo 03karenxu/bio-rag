@@ -8,14 +8,16 @@ _OPUS = "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
 _QWEN = "ollama/qwen2.5:3b"
 _GEMMA = "ollama/gemma3:1b"
 _HAIKU = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-_DSFLASH = "deepseek/deepseek-v4-flash"
+_DSFLASH = "openrouter/deepseek/deepseek-v4-flash"
 _NEMOTRON_EMBED = "openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free"
-_QWEN_EMBED = "qwen/qwen3-embedding-8b"
+_QWEN_EMBED = "openrouter/qwen/qwen3-embedding-8b"
+_GLM52 = "openrouter/z-ai/glm-5.2"
+_DSPRO = "openrouter/deepseek/deepseek-v4-pro"
 
 # models
 EMBED_MODEL = _NEMOTRON_EMBED
 CLAIM_MODEL = _DSFLASH
-ANSWER_MODEL = None
+ANSWER_MODEL = _DSFLASH
 TRIPLE_MODEL = _DSFLASH
 QA_GEN_MODEL = _DSFLASH
 
@@ -27,14 +29,20 @@ FIGURES_DIR = ROOT/"figures"
 CACHE_DIR = ROOT/"preprocess_cache"
 LOG_DIR = ROOT/"logs"
 
+# rag
+RETRIEVAL_LIMIT = 3
+
 # chunking
-MIN_CHUNK_TOKENS = 50
+CHUNK_TOKEN_TARGET = 256
 BATCH_MAX_TOKENS = 5000
+
+# deduplication
+DEDUP_SIM_THRESHOLD = 0.75  # cosine cutoff for embedding-based duplicate clustering
 
 # embedding
 EMBED_INIT_DELAY = 5
 MAX_EMBED_ATTEMPTS = 5
-EMBED_DIMENSION = 1536 # one of 256, 512, 1024, 1536
+EMBED_DIMENSION = 2048
 
 # concurrency
 MAX_CONCURRENT_EMBED = 3

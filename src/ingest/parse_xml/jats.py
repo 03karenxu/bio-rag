@@ -7,8 +7,9 @@ import logging
 from pathlib import Path
 from datetime import date
 import xml.etree.ElementTree as ET
-from preprocess.xml_parsers.schema import *
 from spacy.language import Language
+
+from utils.paper_schema import *
 
 logger = logging.getLogger(__name__)
 
@@ -144,29 +145,29 @@ def _parse_date(meta: ET.Element) -> date | None:
 
     return None
 
-def _parse_abstract(meta: ET.Element) -> Section | None:
+def _parse_abstract(meta: ET.Element) -> list[Paragraph]:
     abstract_el = meta.find("abstract")
     if abstract_el is None:
         logger.warning("No abstract element found")
-        return
-    
-    sec, _, _ = _parse_section(sec=abstract_el)
-    return sec
+        return []
+
+    paragraphs, _, _ = _parse_section(sec=abstract_el)
+    return paragraphs or []
 
 ## body ##
 
-def _parse_body(body: ET.Element | None) -> tuple[list[Section], list[Media], list[InlineTable]]:
+def _parse_body(body: ET.Element | None) -> tuple[list[Paragraph], list[Media], list[InlineTable]]:
 
-    sections: list[Section] = []
+    paragraphs: list[Paragraph] = []
     media: list[Media] = []
     tables: list[InlineTable] = []
     for sec in body.findall("./sec"):
-        s, m, t = _parse_section(sec)
-        if s: sections.append(s)
+        ps, m, t = _parse_section(sec)
+        if ps: paragraphs.extend(ps)
         if m: media.extend(m)
         if t: tables.extend(t)
 
-    return sections, media, tables
+    return paragraphs, media, tables
 
 ## media and tables ##
 
@@ -304,14 +305,15 @@ def _parse_reference(ref: ET.Element) -> Reference | None:
 
 ## helpers ##
 
-def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTable]]:
+def _parse_section(sec: ET.Element, parent_header: str = "") -> tuple[list[Paragraph] | None, list[Media], list[InlineTable]]:
     if sec.get("sec-type") == "supplementary-material":
         return None, [], []
 
     title_el = sec.find("title")
     header = _element_text(title_el)
+    full_header = " > ".join(h for h in (parent_header, header) if h)
 
-    content: list[Paragraph | Section] = []
+    content: list[Paragraph] = []
     media: list[Media] = []
     tables: list[InlineTable] = []
     for child in sec:
@@ -319,14 +321,14 @@ def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTa
         if tag in _TITLE_TAGS:
             continue
         elif tag == "sec":
-            sub_sec, m, t = _parse_section(child)
-            if sub_sec: content.append(sub_sec)
+            sub_content, m, t = _parse_section(child, parent_header=full_header)
+            if sub_content: content.extend(sub_content)
             media.extend(m)
             tables.extend(t)
         elif tag == "p":
             sentences, m ,t = _extract_sentences(child)
             if sentences:
-                p = Paragraph(items=sentences)
+                p = Paragraph(items=sentences, section_header=full_header)
                 content.append(p)
             if m: media.extend(m)
             if t: tables.extend(t)
@@ -340,15 +342,12 @@ def _parse_section(sec: ET.Element) -> tuple[Section, list[Media], list[InlineTa
         elif tag == "list":
             # list outside of paragraph element
             list = _parse_list(child)
-            if list: content.append(Paragraph(items=[list]))
+            if list: content.append(Paragraph(items=[list], section_header=full_header))
 
     if not content and not media and not tables:
         return None, [], []
 
-    return Section(
-        header=header,
-        content=content,
-    ), media, tables
+    return content, media, tables
 
 def _parse_list(list: ET.Element) -> Sentence:
     bullets = []

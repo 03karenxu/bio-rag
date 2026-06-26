@@ -1,4 +1,4 @@
-from grade.mg_client import MemgraphClient
+from utils.mg_client import MemgraphClient
 from grade.schema import Triple, Query
 import logging
 import json
@@ -7,11 +7,11 @@ from tqdm import tqdm
 from pathlib import Path
 
 from config import CACHE_DIR, QA_GEN_MODEL
-from utils.lm import configure_lm
+from utils.lm import openrouter_config
 
 logger = logging.getLogger(__name__)
 
-configure_lm(model_str=QA_GEN_MODEL)
+openrouter_config(model_str=QA_GEN_MODEL)
 
 class _QAGenSignature(dspy.Signature):
     """
@@ -25,7 +25,7 @@ class _QAGenSignature(dspy.Signature):
     - The question must require reasoning through ALL triples in order to arrive at the answer.
       A question answerable from a single triple is not acceptable.
     - The answer must be a specific, concrete entity or short phrase — the terminal node of the
-      reasoning chain. Never an abstract concept like "risk factors" or "study limitations".
+      reasoning chain.
     - The question should not give away the answer — avoid phrasing that makes the answer
       obvious without traversing the full chain.
     - Ground the question and answer strictly in the provided triples and claims.
@@ -43,9 +43,7 @@ class _QAGenSignature(dspy.Signature):
     )
     query: str = dspy.OutputField(
         desc=(
-            "A natural language question that requires chaining through all provided triples "
-            "to answer. The question should start from the subject of the first triple and "
-            "lead to the object of the last triple."
+            "A natural language question that requires chaining through all provided triples to answer."
         )
     )
     answer: str = dspy.OutputField(

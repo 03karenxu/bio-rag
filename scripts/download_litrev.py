@@ -4,11 +4,11 @@ import logging
 import argparse
 
 from config import DATASET_DIR
-from utils.logging import init_logging
-from download.core import download_paper
-from download.fetchers.pmc import PMCFetcher
-from preprocess.xml_parsers.jats import parse_string
-from preprocess.xml_parsers.schema import Paper, PubType
+from utils.log import init_logging
+from ingest.to_disk import save_to_disk
+from ingest.fetch.pmc import PMCFetcher
+from ingest.parse_xml.jats import parse_string
+from utils.paper_schema import Paper, PubType
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
         paper_dir = output_dir / paper.identifier
         paper_dir.mkdir(parents=True, exist_ok=True)
         try:
-            paper_path = download_paper(paper=paper, out_dir=paper_dir, wrap_main_file=True)
+            paper_path = save_to_disk(paper=paper, out_dir=paper_dir, wrap_main_file=True)
             saved_papers += 1
         except Exception as e:
             logger.warning(f"Could not download {paper.identifier}: {e}")

@@ -3,7 +3,7 @@ from config import SRC
 import dspy
 import os
 
-def configure_lm(model_str: str) -> None:
+def openrouter_config(model_str: str) -> None:
     load_dotenv(SRC / ".env")
     api_key = os.getenv("OPENROUTER_KEY")
     if not api_key:

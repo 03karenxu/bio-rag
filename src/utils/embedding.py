@@ -1,23 +1,23 @@
+import os
+import json
+import boto3
 import random
 import logging
 import asyncio
-import json
-import boto3
-from botocore.config import Config
 import litellm
-litellm.suppress_debug_info = True
+from typing import Callable
+from functools import wraps
+from botocore.config import Config
 from litellm.types.utils import Embedding
 from litellm import aembedding, CustomLLM, EmbeddingResponse, Usage
 from config import EMBED_INIT_DELAY, EMBED_MODEL, MAX_EMBED_ATTEMPTS, SRC
-from typing import Callable
-from functools import wraps
-import os
 from dotenv import load_dotenv
+logger = logging.getLogger(__name__)
 
 load_dotenv(SRC / ".env")
 OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 
-logger = logging.getLogger(__name__)
+## cohere-specific ##
 
 class CohereBedrockAdapter(CustomLLM):
     '''
@@ -82,12 +82,13 @@ class CohereBedrockAdapter(CustomLLM):
             None, lambda: self._invoke(self._build_body(input, **kwargs))
         )
 
-
 _adapter = CohereBedrockAdapter()
 
 litellm.custom_provider_map = [
     {"provider": "cohere-bedrock", "custom_handler": _adapter}
 ]
+
+## general embedding util ##
 
 def with_retry(max_attempts: int, init_delay: float):
     def decorator(func: Callable):
@@ -111,15 +112,18 @@ def with_retry(max_attempts: int, init_delay: float):
         return wrapper
     return decorator
 
-
 @with_retry(max_attempts=MAX_EMBED_ATTEMPTS, init_delay=EMBED_INIT_DELAY)
-async def embed(input_: list[str | dict]) -> list[list[float]]:
-    logger.debug(f"Embedding {len(input_)} items...")
+async def embed(input_: list[str] | str, **kwargs) -> list[list[float]]:
+    logger.debug(f"Embedding {len(input_) if isinstance(input_, list) else 1} item(s)...")
     resp = await aembedding(
         model=EMBED_MODEL,
-        input=list(input_),
+        input=input_,
         api_base="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
+        **kwargs
     )
     logger.debug(f"Received {len(input_)} embeddings")
-    return [item["embedding"] for item in resp.data]
+    embeddings = [item["embedding"] for item in resp.data]
+    if len(embeddings) == 1:
+        return embeddings[0]
+    return embeddings

@@ -3,11 +3,11 @@ import argparse
 from tqdm import tqdm
 
 from config import DATASET_DIR
-from utils.logging import init_logging
-from download.core import download_paper
-from download.fetchers.pmc import PMCFetcher
-from download.fetchers.elsevier import SDFetcher
-from preprocess.xml_parsers.jats import parse_file
+from utils.log import init_logging
+from ingest.to_disk import save_to_disk
+from ingest.fetch.pmc import PMCFetcher
+from ingest.fetch.elsevier import SDFetcher
+from ingest.parse_xml.jats import parse_file
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ if __name__ == "__main__":
 
             # attempt to download paper
             try:
-                out_path = download_paper(fetched, out_dir=ref_dir)
+                out_path = save_to_disk(fetched, out_dir=ref_dir)
                 logger.info(f"New file created: {out_path}")
                 total_saved += 1
             except Exception as e:

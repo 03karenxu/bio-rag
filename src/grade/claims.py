@@ -5,13 +5,13 @@ from tqdm import tqdm
 from itertools import batched
 
 from config import CACHE_DIR, CLAIM_MODEL
-from utils.lm import configure_lm
+from utils.lm import openrouter_config
 from grade.schema import Claim
-from preprocess.xml_parsers.schema import Section, Paper
+from utils.paper_schema import Paper
 
 logger = logging.getLogger(__name__)
 
-configure_lm(model_str=CLAIM_MODEL)
+openrouter_config(model_str=CLAIM_MODEL)
 
 TARGET_SECTIONS = {"discussion", "conclusion"}
 
@@ -95,8 +95,8 @@ def extract_claims(paper: Paper) -> list[Claim]:
     logger.info(f"Generating claims for {paper.front.hash}")
 
     # only get sentences from target sections
-    relevant = [s for s in paper.body if _is_claim_section(s)]
-    all_sentences = [sent for section in relevant for sent in section.sentences()]
+    relevant = [p for p in paper.body if _is_claim_section(p)]
+    all_sentences = [sent for p in relevant for sent in p.sentences()]
     all_claims: list[Claim] = []
 
     # generate claims from each sentence while writing to cache
@@ -119,7 +119,7 @@ def extract_claims(paper: Paper) -> list[Claim]:
                 logger.warning(f"Claim generation failed for sentence {sentence.id!r}: {e}")
                 continue
     
-    all_claims = _validate_claims(all_claims)
+    # all_claims = _validate_claims(all_claims)
     return all_claims
 
 def _validate_claims(claims: list[Claim], batch_size: int = 50) -> list[Claim]:
@@ -149,5 +149,5 @@ def _validate_claims(claims: list[Claim], batch_size: int = 50) -> list[Claim]:
     logger.info(f"Consistency check: {len(verified)}/{len(claims)} claims passed")
     return verified
 
-def _is_claim_section(section: Section) -> bool:
-    return any(kw in section.header.lower() for kw in TARGET_SECTIONS)
+def _is_claim_section(paragraph) -> bool:
+    return any(kw in paragraph.section_header.lower() for kw in TARGET_SECTIONS)

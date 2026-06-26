@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import spacy
-import string
 import hashlib
 import logging
 from pathlib import Path
@@ -10,7 +9,7 @@ from datetime import date
 import xml.etree.ElementTree as ET
 from spacy.language import Language
 
-from preprocess.xml_parsers.schema import *
+from utils.paper_schema import *
 
 logger = logging.getLogger(__name__)
 
@@ -144,65 +143,47 @@ def _parse_date(head: ET.Element) -> date | None:
         logger.warning(f"Bad date: {year}-{month}-{day}")
         return
 
-def _parse_abstract(head: ET.Element) -> Section | None:
+def _parse_abstract(head: ET.Element) -> list[Paragraph]:
     abstract_el = head.find(".//ce:abstract", namespaces=_NAMESPACES)
     if abstract_el is None:
         logger.warning("Could not find abstract")
-        return
+        return []
 
-    sections: list[Section] = []
+    paragraphs: list[Paragraph] = []
     for sec in abstract_el.findall(".//ce:abstract-sec", namespaces=_NAMESPACES):
         section_title = sec.findtext("ce:section-title", default="", namespaces=_NAMESPACES)
-        paragraphs: list[Paragraph] = []
+        full_header = " > ".join(h for h in ("Abstract", section_title) if h)
         for para in sec.findall(".//ce:simple-para", namespaces=_NAMESPACES):
             sentences = _extract_sentences(para)
             if not sentences: continue
             paragraphs.append(
-                Paragraph(items=sentences)
-            )
-        if paragraphs:
-            sections.append(
-                Section(
-                    header=section_title,
-                    content=paragraphs,
-                )
+                Paragraph(items=sentences, section_header=full_header)
             )
 
     # fallback: flat abstract
-    if not sections:
-        paragraphs = []
+    if not paragraphs:
         for para in abstract_el.findall(".//ce:simple-para", namespaces=_NAMESPACES):
             sentences = _extract_sentences(para)
             if sentences:
                 paragraphs.append(
-                    Paragraph(items=sentences)
+                    Paragraph(items=sentences, section_header="Abstract")
                 )
-        return Section(
-            header="Abstract",
-            content=paragraphs,
-        )
 
-    if len(sections) == 1:
-        s = sections[0]
-        s.header = "Abstract"
-        return s
-    
-    return Section(
-        header="Abstract",
-        content=sections,
-    )
+    return paragraphs
 
 ## body ##
 
-def _parse_body(body: ET.Element | None) -> tuple[list[Section], list[Media], list[InlineTable]]:
-    sections: list[Section] = []
+def _parse_body(body: ET.Element | None) -> tuple[list[Paragraph], list[Media], list[InlineTable]]:
+    paragraphs: list[Paragraph] = []
     media: list[Media] = []
     tables: list[InlineTable] = []
-    for sec in body.findall(".//ce:section", namespaces=_NAMESPACES):
-        s = _parse_section(sec)
-        if s: sections.append(s)
+    # sections may be wrapped in a <ce:sections> element; fall back to direct children
+    container = body.find("./ce:sections", namespaces=_NAMESPACES) or body
+    for sec in container.findall("./ce:section", namespaces=_NAMESPACES):
+        ps = _parse_section(sec)
+        if ps: paragraphs.extend(ps)
 
-    return sections, media, tables
+    return paragraphs, media, tables
 
 ## media and tables ##
 
@@ -269,32 +250,29 @@ def _parse_reference(ref: ET.Element) -> Reference:
 
 ## helpers ##
 
-def _parse_section(sec: ET.Element) -> Section:
+def _parse_section(sec: ET.Element, parent_header: str = "") -> list[Paragraph]:
     title_el = sec.find("ce:section-title", namespaces=_NAMESPACES)
     header = _element_text(title_el)
+    full_header = " > ".join(h for h in (parent_header, header) if h)
 
-    content: list[Paragraph | Section] = []
+    content: list[Paragraph] = []
     for child in sec:
         tag = _local(child.tag).strip()
         if tag in _TITLE_TAGS:
             continue
         elif tag == "section":
-            sub_sec = _parse_section(child)
-            if sub_sec: content.append(sub_sec)
+            sub_content = _parse_section(child, parent_header=full_header)
+            if sub_content: content.extend(sub_content)
         elif tag == "para":
             sentences = _extract_sentences(child)
             if sentences:
                 p = Paragraph(
-                    items=sentences
+                    items=sentences,
+                    section_header=full_header,
                 )
                 content.append(p)
 
-    if not content: return None
-
-    return Section(
-        header=header,
-        content=content,
-    )
+    return content if content else []
 
 def _get_reftype(rid: str) -> str | None:
     if rid.startswith("tbl"):

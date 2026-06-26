@@ -1,18 +1,13 @@
 import logging
 from pathlib import Path
-from dataclasses import dataclass
+
 from config import COHERE_COMPATIBLE_FORMATS
-from download.img_processing import save_as_jpg, resize_and_save
+from ingest.schema import FetchedPaper
+from ingest.img_processing import save_as_jpg, resize_and_save
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class FetchedPaper:
-    identifier: str
-    main_file: tuple[str, bytes]
-    media_files: dict[str, bytes] | None = None
-
-def download_paper(paper: FetchedPaper, out_dir: Path, wrap_main_file: bool = False) -> str:
+def save_to_disk(paper: FetchedPaper, out_dir: Path, wrap_main_file: bool = False) -> str:
     # download main paper file
     paper_root = out_dir / "paper" if wrap_main_file else out_dir
     main_filename, main_bytes = paper.main_file

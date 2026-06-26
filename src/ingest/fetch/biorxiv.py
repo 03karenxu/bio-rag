@@ -6,7 +6,7 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Iterator
 from datetime import datetime
-from download.core import FetchedPaper
+from ingest.schema import FetchedPaper
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)

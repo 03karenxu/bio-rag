@@ -1,8 +1,8 @@
 import logging
 import requests
 from bs4 import BeautifulSoup
-from download.core import FetchedPaper
-from download.rate_limiter import RateLimiter
+from ingest.schema import FetchedPaper
+from ingest.fetch.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 

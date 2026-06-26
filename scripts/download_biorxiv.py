@@ -2,9 +2,9 @@ import logging
 import argparse
 from pathlib import Path
 from config import DATASET_DIR
-from download.core import download_paper
-from utils.logging import init_logging
-from download.fetchers.biorxiv import BiorxivFetcher
+from ingest.to_disk import save_to_disk
+from utils.log import init_logging
+from ingest.fetch.biorxiv import BiorxivFetcher
 
 logger = logging.getLogger(__name__)
 if __name__ == "__main__":
@@ -26,7 +26,7 @@ if __name__ == "__main__":
         paper_dir = output_dir / paper.identifier.replace("/", "_")
         paper_dir.mkdir(parents=True, exist_ok=True)
         try:
-            download_paper(paper=paper, out_dir=paper_dir, wrap_main_file=True)
+            save_to_disk(paper=paper, out_dir=paper_dir, wrap_main_file=True)
         except Exception as e:
             logger.warning(f"Could not download paper {paper.identifier}, skipping: {e}")
             failed.append(paper.identifier)

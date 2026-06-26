@@ -1,7 +1,7 @@
-from preprocess.xml_parsers import elsevier
-from preprocess.xml_parsers import jats
-from preprocess.xml_parsers.schema import *
-from utils.logging import init_logging
+from ingest.parse_xml import elsevier
+from ingest.parse_xml import jats
+from utils.paper_schema import *
+from utils.log import init_logging
 from config import DATASET_DIR
 import argparse
 import json

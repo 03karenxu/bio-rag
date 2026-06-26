@@ -1,14 +1,14 @@
-import logging
 import os
+import logging
 import requests
-from download.core import FetchedPaper
-from download.rate_limiter import RateLimiter
+from ingest.schema import FetchedPaper
+from ingest.fetch.rate_limiter import RateLimiter
 from dotenv import load_dotenv
 from config import SRC, DATASET_DIR
+
 logger = logging.getLogger(__name__)
 
 _sd_limiter = RateLimiter(rate=1, period=60.0)
-
 load_dotenv(SRC/".env")
 
 _ELSEVIER_PREFIXES = ("10.1016/", "10.1006/", "10.1053/", "10.1054/")
@@ -22,7 +22,7 @@ class SDFetcher():
         self.base_url = "https://api.elsevier.com"
         self.api_key = os.getenv("ELSEVIER_KEY")
         if not self.api_key:
-            raise ValueError("ELSEVIER_API_KEY not set")
+            raise ValueError("ELSEVIER_KEY not set")
     
     def fetch_by_doi(self, doi: str) -> FetchedPaper:
         '''
