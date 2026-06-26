@@ -1,6 +1,9 @@
 import logging
+from config import LOG_DIR
 
 def init_logging(log_file: str | None = None):
+    if log_file:
+        log_file = LOG_DIR / log_file
     handler = logging.FileHandler(log_file, mode="w") if log_file else logging.StreamHandler()
     handler.setFormatter(logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -12,5 +15,7 @@ def init_logging(log_file: str | None = None):
     root.handlers.clear()
     root.addHandler(handler)
     
-    for name in ("__main__", "utils.embed", "utils.xml_parser", "utils.image_handling"):
+    for name in ("__main__", "utils.embeddings", "utils.xml_parsing"):
         logging.getLogger(name).setLevel(logging.INFO)
+    
+    # logging.getLogger("__main__").setLevel(logging.DEBUG)
