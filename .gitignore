@@ -12,13 +12,15 @@ wheels/
 .env
 secrets.env
 
-dataset/
+datasets/
 preprocess_cache/
 backup/
 logs/
-notebooks/
+_notebooks/
+_archive/
 figures/
-
+lib/ 
 *.png
 
 .DS_Store
+.claude
